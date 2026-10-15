@@ -131,11 +131,11 @@
       fish: ['Milky Way Minnow|0.1|0|0', 'Quasar Guppy|0.2|0|0', 'Comet Tail Fish|5|0.15|0', 'Nebula Koi|20|0.25|1', 'Supernova Snapper|50|0.35|1', 'Pulsar Puffer|10|0.45|1', 'Saturn Sunfish|2000|0.5|1', 'Meteor Marlin|900|0.6|2', 'Astro Anglerfish|20|0.7|2', 'Big Bang Barracuda|300|0.8|2', 'Black Hole Bass|100|0.85|3'],
       others: ['Lunar Snail|snail|2|0|0', 'Asteroid Urchin|urchin|20|0.1|0', 'Galaxy Starfish|starfish|5|0.1|0', 'Stardust Coral|coral|20|0.2|0', 'Martian Crab|crab|30|0.2|1', 'Star Dolphin|dolphin|300|0.3|1', 'Plasma Eel|eel|200|0.5|2', 'Orbit Squid|squid|100|0.6|1', 'Space Whale|whale|500000|0.95|4'] }
   ];
-  const LOC_PRICES = [0, 250].concat(Array.from({ length: 18 }, (_, k) => niceRound(1000 * Math.pow(3.85, k))));
+  const LOC_PRICES = [0, 150].concat(Array.from({ length: 18 }, (_, k) => niceRound(1000 * Math.pow(3.85, k))));
   const LOC_DEPTHS = [10, 14, 20, 30, 45, 65, 90, 125, 175, 250, 400, 600, 1000, 1500, 2400, 3600, 5500, 7500, 11000, 20000];
   LOCATIONS.forEach((l, i) => { l.tier = i; l.price = LOC_PRICES[i]; l.maxDepth = LOC_DEPTHS[i]; });
 
-  function tierValue(t) { return 4 * Math.pow(3.3, t); }
+  function tierValue(t) { return 2 * Math.pow(3.3, t); }
 
   // ---------- gear ----------
   const ROD_NAMES = ['Raggity Old Stick', 'Twig & Twine', 'Splintery Branch', 'Bamboo Pole', 'Garage Sale Rod', 'Kiddie Spincaster', 'Hickory Rod', 'Fiberglass Rod', 'Lucky Lure Rod', 'Graphite Rod', 'Trusty Spinner', 'Carbon Caster', 'River Runner', 'Swamp Stalker', 'Telescopic Rod', 'Pro Angler', 'Surf Caster', 'Deep Sea Rod', 'Reef Raider', 'Titanium Rod', 'Harpoon Rod', "Captain's Rod", 'Storm Chaser', 'Iceberg Breaker', 'Coral Crusher', 'Whale Wrangler', 'Thunder Rod', 'Volcanic Rod', 'Abyss Diver', 'Kraken Tamer', "Pirate King's Rod", 'Golden Rod', 'Diamond Rod', 'Plasma Rod', 'Laser Line 3000', 'Quantum Rod', 'Trident Rod', 'Atlantean Scepter', 'Dragon Bone Rod', 'Northern Lights Rod', 'Black Hole Rod', 'Galaxy Rod', 'Rod of Poseidon', 'Infinity Rod', 'The Omega Rod'];
@@ -489,18 +489,20 @@
       sp = pickWeighted(GLOBAL.frenzy, s => s.w * Math.pow(bait.luck * lm, s.frenzy.tier), rand);
     } else if (rand() < junkChance(baitIdx)) {
       sp = pickWeighted(GLOBAL.junk, s => RARITIES[s.rarity].w, rand);
-    } else if (rand() < 0.05) {
+    } else if (rand() < 0.05 * (1 - 0.8 * Math.min(1, depth / loc.maxDepth))) {
       sp = pickWeighted(GLOBAL.plankton, s => RARITIES[s.rarity].w * Math.pow(bait.luck * 1.03, s.rarity * 1.15), rand);
     } else {
       const frac = depth / loc.maxDepth;
-      const pool = POOLS[locIdx].filter(s => s.depth <= frac + 1e-9);
-      const luck = bait.luck * lm * (1 + 0.012 * locIdx);
+      // Creatures live in depth bands: you mostly catch what lives near your hook, and the deep is luckier.
+      const all = POOLS[locIdx].filter(s => s.depth <= frac + 1e-9);
+      const band = all.filter(s => s.depth >= frac - 0.3);
+      const luck = bait.luck * lm * (1 + 0.012 * locIdx) * (1 + 0.9 * Math.min(1, frac));
       const ws = rarityWeights(luck);
       let rar = pickWeighted([0, 1, 2, 3, 4, 5], i => ws[i], rand);
       let cand = [];
-      for (; rar >= 0; rar--) { cand = pool.filter(s => s.rarity === rar); if (cand.length) break; }
-      // deeper species are a little more likely to bite when your hook is down there
-      sp = pickWeighted(cand, s => 1 + deep * s.depth, rand);
+      for (; rar >= 0; rar--) { cand = band.filter(s => s.rarity === rar); if (!cand.length) cand = all.filter(s => s.rarity === rar); if (cand.length) break; }
+      // the closer a creature's home depth is to your hook, the more likely it bites
+      sp = pickWeighted(cand, s => Math.pow(1 + deep * 2 * s.depth, 2) / (1 + 12 * (frac - s.depth)), rand);
     }
     let g = 0; for (let i = 0; i < 4; i++) g += rand(); g = (g - 2) / 0.58; // ~N(0,1)
     const kg = Math.max(0.001, sp.kg * Math.exp(g * 0.28));

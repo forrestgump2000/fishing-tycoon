@@ -534,14 +534,17 @@
   }
 
   function drawPower(fx, sy) {
-    const w = 150 * K, h = 18 * K, x = fx - w / 2 + 20 * K, y = sy - 200 * K;
+    const w = 150 * K, h = 18 * K, x = Math.max(8, fx - w / 2 + 20 * K), y = sy - 200 * K;
     ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = '#1d2235';
     ctx.fillStyle = '#fff8e7'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, 9) : ctx.rect(x, y, w, h); ctx.fill(); ctx.stroke();
     const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#3fbf4f'); g.addColorStop(0.6, '#ffd23f'); g.addColorStop(1, '#ff4d5e');
     ctx.fillStyle = g; ctx.fillRect(x + 3, y + 3, (w - 6) * P.p, h - 6);
     ctx.font = "900 " + Math.round(14 * K + 2) + "px Nunito, sans-serif"; ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.lineWidth = 4;
-    const s = 'Depth ' + meters(Math.max(0.3, P.p * maxCast()));
-    ctx.strokeText(s, x + w / 2, y - 8); ctx.fillText(s, x + w / 2, y - 8);
+    const d = Math.max(0.3, P.p * maxCast()), fr = d / L.maxDepth;
+    const zone = fr < 0.25 ? ['Shallows', '#bff6ff'] : fr < 0.5 ? ['Mid-water ★', '#8fe36b'] : fr < 0.75 ? ['Deep water ★★', '#ffd23f'] : ['The Abyss ★★★', '#ff9a8a'];
+    const s = 'Depth ' + meters(d);
+    ctx.strokeText(s, x + w / 2, y - 30 * K); ctx.fillText(s, x + w / 2, y - 30 * K);
+    ctx.fillStyle = zone[1]; ctx.strokeText(zone[0], x + w / 2, y - 8); ctx.fillText(zone[0], x + w / 2, y - 8);
     ctx.restore();
   }
 
