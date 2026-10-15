@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Creature Gallery</title>
+<style>body{margin:0;background:#2a7fc0;font:12px sans-serif;color:#fff}#g{display:grid;grid-template-columns:repeat(auto-fill,180px);gap:4px;padding:8px}div.c{background:rgba(0,0,0,.15);border-radius:8px;text-align:center}canvas{width:180px;height:130px}</style>
+</head><body><div id="g"></div>
+<script src="../js/data.js"></script><script src="../js/art.js"></script>
+<script>
+const seen = new Set(), picks = [];
+const q = new URLSearchParams(location.search).get('q');
+for (const sp of FT.SPECIES) {
+  const key = q ? sp.id : sp.arch + (sp.art.f.kind || '') + (sp.art.f.cone ? 'c' : '') + (sp.art.f.nautilus ? 'n' : '');
+  if (q ? sp.id.includes(q) : !seen.has(key)) { seen.add(key); picks.push(sp); }
+}
+const cs = picks.slice(0, 120).map(sp => {
+  const d = document.createElement('div'); d.className = 'c';
+  const c = document.createElement('canvas'); c.width = 360; c.height = 260; d.appendChild(c);
+  d.appendChild(document.createTextNode(sp.name)); document.getElementById('g').appendChild(d); return [c, sp];
+});
+function loop(t) {
+  for (const [c, sp] of cs) { const x = c.getContext('2d'); x.setTransform(1,0,0,1,0,0); x.clearRect(0,0,360,260); x.translate(180,130);
+    const tall = ['seahorse','octopus','kraken','santa','alien','poseidon','coral','sponge','barnacle','plankton','seaspider','urchin','bubblebuddy','starfish'].includes(sp.art.arch);
+    Art.creature(x, sp, tall ? 170 : 250, t / 1000); }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script></body></html>

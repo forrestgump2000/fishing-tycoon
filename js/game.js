@@ -1,0 +1,731 @@
+/* Fishing Tycoon — game loop, fishing mechanics, UI. */
+(function () {
+  'use strict';
+  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance } = window.FT;
+  const Art = window.Art;
+  const $ = (s) => document.querySelector(s);
+  const cv = $('#game'), ctx = cv.getContext('2d');
+  let W = 0, H = 0, DPR = 1, K = 1;
+
+  // ---------------- formatting ----------------
+  const SUF = ['', 'K', 'M', 'B', 'T', 'Qa', 'Qi'];
+  function money(v) {
+    if (v < 10) return '$' + v.toFixed(2);
+    if (v < 1000) return '$' + Math.floor(v);
+    let i = 0; while (v >= 1000 && i < SUF.length - 1) { v /= 1000; i++; }
+    return '$' + (v < 100 ? v.toFixed(v < 10 ? 2 : 1) : Math.floor(v)) + SUF[i];
+  }
+  function kgs(k) { return k < 1 ? Math.max(1, Math.round(k * 1000)) + ' g' : k < 1000 ? (k < 10 ? k.toFixed(2) : k.toFixed(1)) + ' kg' : (k / 1000).toFixed(k < 10000 ? 2 : 1) + ' t'; }
+  function meters(m) { return m < 1000 ? (m < 10 ? m.toFixed(1) : Math.round(m)) + ' m' : (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km'; }
+  function rtag(r) { const R = RARITIES[r]; return '<span class="rtag" style="background:' + R.color + '">' + R.name + '</span>'; }
+  function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+  // ---------------- save state ----------------
+  const SAVE_KEY = 'fishing-tycoon-save-v1';
+  function fresh() { return { money: 0, rod: 0, bait: 0, loc: 0, rods: [0], baits: [0], locs: [0], bucket: [], dex: {}, stats: { casts: 0, catches: 0, earned: 0, fabled: 0, snaps: 0, best: null }, sound: true, quick: true, tut: true }; }
+  function load() {
+    try { const raw = localStorage.getItem(SAVE_KEY); if (raw) { const s = Object.assign(fresh(), JSON.parse(raw)); s.bucket = s.bucket.filter((b) => BY_ID[b.id]); return s; } } catch (e) { /* no storage */ }
+    return fresh();
+  }
+  let S = load();
+  function save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(S)); } catch (e) { /* ignore */ } }
+
+  // ---------------- sound ----------------
+  const Snd = (() => {
+    let ac = null;
+    function A() { if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { ac = null; } } if (ac && ac.state === 'suspended') ac.resume(); return ac; }
+    function tone(f, d, type, vol, slide, delay) {
+      if (!S.sound) return; const a = A(); if (!a) return;
+      const t = a.currentTime + (delay || 0), o = a.createOscillator(), g = a.createGain();
+      o.type = type || 'sine'; o.frequency.setValueAtTime(f, t);
+      if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(30, f + slide), t + d);
+      g.gain.setValueAtTime(vol || 0.12, t); g.gain.exponentialRampToValueAtTime(0.001, t + d);
+      o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + d + 0.05);
+    }
+    function noise(d, vol, freq) {
+      if (!S.sound) return; const a = A(); if (!a) return;
+      const n = Math.floor(a.sampleRate * d), buf = a.createBuffer(1, n, a.sampleRate), ch = buf.getChannelData(0);
+      for (let i = 0; i < n; i++) ch[i] = (Math.random() * 2 - 1) * (1 - i / n);
+      const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+      f.type = 'bandpass'; f.frequency.value = freq || 800; g.gain.value = vol || 0.2;
+      src.buffer = buf; src.connect(f); f.connect(g); g.connect(a.destination); src.start();
+    }
+    const notes = [523, 659, 784, 1047, 1319, 1568, 2093, 2637];
+    return {
+      unlock: A,
+      whoosh() { noise(0.25, 0.12, 1500); },
+      splash() { noise(0.4, 0.3, 700); tone(180, 0.2, 'sine', 0.1, -80); },
+      bite() { tone(880, 0.08, 'square', 0.07); tone(1175, 0.1, 'square', 0.07, 0, 0.1); },
+      tick() { tone(250 + Math.random() * 120, 0.03, 'triangle', 0.035); },
+      catch(r) { const n = Math.min(8, 3 + r); for (let i = 0; i < n; i++) tone(notes[i], 0.2, 'triangle', 0.11, 0, i * 0.075); if (r >= 4) for (let i = 0; i < 4; i++) tone(notes[7 - i] * 0.5, 0.35, 'sine', 0.06, 0, 0.6 + i * 0.1); },
+      fail() { tone(392, 0.25, 'sawtooth', 0.06, -120); tone(262, 0.4, 'sawtooth', 0.06, -100, 0.22); },
+      snap() { noise(0.12, 0.35, 3500); tone(600, 0.35, 'square', 0.05, -450); },
+      cash() { tone(1318, 0.07, 'square', 0.06); tone(1760, 0.16, 'square', 0.06, 0, 0.07); },
+      click() { tone(660, 0.04, 'triangle', 0.06); },
+      fabled() { for (let i = 0; i < 12; i++) tone(notes[i % 8] * (i >= 8 ? 2 : 1), 0.3, 'sine', 0.09, 0, i * 0.09); }
+    };
+  })();
+
+  // ---------------- world ----------------
+  let L, waterPx, ppm, critters = [], particles = [];
+  const CRAWL = new Set(['crab', 'lobster', 'starfish', 'snail', 'urchin', 'sponge', 'coral', 'barnacle', 'seaspider']);
+  const STATIC = new Set(['coral', 'sponge', 'barnacle']);
+  function sizeFor(sp) {
+    if (sp.arch === 'plankton') return 26 * K;
+    const base = sp.rarity === FABLED ? 120 : 24 + Math.log10(sp.kg * 1000 + 1) * 17;
+    return Math.min(190, Math.max(24, base)) * K;
+  }
+  function pickRar(list) {
+    let tot = 0; for (const s of list) tot += RARITIES[s.rarity].w;
+    let r = Math.random() * tot; for (const s of list) { r -= RARITIES[s.rarity].w; if (r <= 0) return s; } return list[0];
+  }
+  function newCritter(initial) {
+    const shallow = Math.random() < 0.4;
+    let sp = Math.random() < 0.07 ? pickRar(GLOBAL.plankton) : pickRar(shallow ? POOLS[S.loc].filter((s) => s.depth <= 0.15) : POOLS[S.loc]);
+    const size = sizeFor(sp), crawl = CRAWL.has(sp.arch);
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    let y;
+    if (crawl) y = waterPx - size * 0.3 - 4;
+    else if (shallow) y = 30 + Math.random() * Math.min(waterPx * 0.5, H * 0.45);
+    else { const lo = Math.max(30, sp.depth * waterPx), hi = Math.min(waterPx - 50, lo + 0.3 * waterPx + 80); y = lo + Math.random() * Math.max(10, hi - lo); }
+    const x = initial ? Math.random() * W : (dir > 0 ? -size - 40 : W + size + 40);
+    return { sp, size, x, y, dir, crawl, still: STATIC.has(sp.arch), speed: crawl ? 10 + Math.random() * 15 : (25 + Math.random() * 45) * sp.art.ms, t0: Math.random() * 100 };
+  }
+  function setupLoc() {
+    L = LOCATIONS[S.loc];
+    waterPx = Math.round(650 + Math.log10(L.maxDepth / 10) * 900);
+    ppm = waterPx / L.maxDepth;
+    critters = []; const n = Math.round(12 + waterPx / 140);
+    for (let i = 0; i < n; i++) critters.push(newCritter(true));
+    particles = [];
+    resetPhase();
+    cam.y = cam.target = -H * 0.47;
+  }
+
+  // ---------------- phases ----------------
+  const cam = { y: 0, target: 0 };
+  let phase = 'idle', P = {}, time = 0, holding = false;
+  function resetPhase() { phase = 'idle'; P = {}; holding = false; }
+  function fisherX() { return Math.max(110 * K, Math.min(W * 0.2, 260)); }
+  function maxCast() { return Math.min(RODS[S.rod].depth, L.maxDepth); }
+  function surfY() { return -cam.y; }
+
+  function startCharge() { phase = 'charge'; P = { p: 0, dir: 1 }; if (S.tut) { S.tut = false; $('#hint').classList.add('hidden'); save(); } }
+  function releaseCast() {
+    const p = Math.max(0.08, P.p);
+    const fx = fisherX();
+    const tx = fx + 90 * K + p * Math.max(60, W - fx - 200 * K);
+    phase = 'cast'; P = { p, t: 0, dur: 0.55 + p * 0.25, tx, depth: Math.max(0.3, p * maxCast()) };
+    S.stats.casts++;
+    Snd.whoosh();
+  }
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function update(dt) {
+    time += dt;
+    const sy = surfY();
+    // camera
+    if (phase === 'sink' || phase === 'wait' || phase === 'bite' || phase === 'reel' || phase === 'retrieve' || phase === 'land') {
+      const hy = P.hookY || 0;
+      cam.target = Math.max(-H * 0.47, Math.min(waterPx + 80 - H, hy - H * 0.5));
+    } else cam.target = -H * 0.47;
+    cam.y += (cam.target - cam.y) * Math.min(1, dt * 4);
+
+    // critters
+    for (let i = 0; i < critters.length; i++) {
+      const c = critters[i];
+      if (c.still) continue;
+      const m = Art.motion(c.sp.art, time + c.t0);
+      c.x += c.dir * c.speed * (c.crawl ? 1 : m.sp) * dt * K;
+      if (c.x < -c.size - 60 || c.x > W + c.size + 60) critters[i] = newCritter(false);
+    }
+    // particles
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i]; p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += (p.g || 0) * dt;
+      if (p.t > p.life) particles.splice(i, 1);
+    }
+
+    switch (phase) {
+      case 'charge': P.p += P.dir * dt * 0.85; if (P.p >= 1) { P.p = 1; P.dir = -1; } if (P.p <= 0) { P.p = 0; P.dir = 1; } break;
+      case 'cast':
+        P.t += dt;
+        if (P.t >= P.dur) {
+          phase = 'sink'; P.hookY = 0; P.targetY = P.depth * ppm; P.x = P.tx;
+          Snd.splash(); splash(P.x, 0);
+        }
+        break;
+      case 'sink': {
+        const sp = Math.max(160, P.targetY / 1.6) * dt;
+        P.hookY = Math.min(P.targetY, P.hookY + sp);
+        if (Math.random() < dt * 6) bubble(P.x, P.hookY);
+        if (P.hookY >= P.targetY) {
+          phase = 'wait';
+          P.catch = rollCatch(S.loc, S.rod, S.bait, P.depth);
+          P.wait = rand(1.4, 4.5) * BAITS[S.bait].bite;
+          P.wt = 0;
+          const sz = sizeFor(P.catch.sp);
+          P.biter = { size: sz, dir: Math.random() < 0.5 ? 1 : -1 };
+          P.biter.x = P.biter.dir > 0 ? -sz - 50 : W + sz + 50;
+        }
+        break;
+      }
+      case 'wait': {
+        P.wt += dt;
+        const b = P.biter, mouthOff = b.size * 0.45;
+        const goal = P.x - b.dir * mouthOff;
+        const remain = P.wait - P.wt;
+        if (remain < 1.8) b.x += (goal - b.x) * Math.min(1, dt * 3.2);
+        if (remain <= 0) { phase = 'bite'; P.bt = 0; P.window = 1.05 + 0.35 * (S.bait / 44); Snd.bite(); for (let i = 0; i < 6; i++) bubble(P.x, P.hookY); }
+        break;
+      }
+      case 'bite':
+        P.bt += dt;
+        if (P.bt > P.window) { fail('Too slow! It spat out the hook.'); }
+        break;
+      case 'reel': reelUpdate(dt); break;
+      case 'land':
+        P.hookY = Math.max(0, P.hookY - Math.max(400, P.hookY * 2.2) * dt);
+        if (P.hookY <= 0) { phase = 'leap'; P.lt = 0; splash(P.x, 0); Snd.splash(); }
+        break;
+      case 'leap':
+        P.lt += dt;
+        if (P.lt > 0.75) landed();
+        break;
+      case 'retrieve':
+        P.hookY = Math.max(0, P.hookY - Math.max(350, P.hookY * 2.5) * dt);
+        if (P.hookY <= 0) resetPhase();
+        break;
+    }
+    void sy;
+  }
+
+  function fail(msg, cls) {
+    if (P.biter) P.biter.flee = true;
+    phase = 'retrieve'; P.fleeT = 0;
+    toast(msg, cls || 'bad'); Snd.fail();
+  }
+
+  function hookIt() {
+    const { sp, kg } = P.catch, rod = RODS[S.rod];
+    if (sp.rarity !== FABLED && kg > rod.cap * 1.6) {
+      S.stats.snaps++; Snd.snap();
+      phase = 'retrieve'; if (P.biter) P.biter.flee = true;
+      toast('💥 SNAP! A ' + kgs(kg) + ' monster was too heavy for your rod (holds ' + kgs(rod.cap) + ').', 'bad');
+      return;
+    }
+    const heavy = sp.rarity !== FABLED && kg > rod.cap;
+    const r = sp.rarity;
+    const diff = Math.min(1, 0.18 + Math.min(r, 5) * 0.1 + (r === FABLED ? 0.45 : 0) + (heavy ? 0.22 : 0));
+    phase = 'reel';
+    P.mg = { zone: rod.reel * (heavy ? 0.8 : 1) + (r <= 1 ? 0.04 : 0), pos: 0.2, vel: 0, fish: 0.35, fv: 0, target: 0.5, tt: 0, prog: 0.3, diff, heavy, startY: P.hookY };
+    if (heavy) toast('⚠️ Heavy catch! Your line is straining...', 'bad');
+  }
+
+  function reelUpdate(dt) {
+    const m = P.mg;
+    // player box
+    m.vel += (holding ? 2.9 : -2.4) * dt;
+    m.vel *= Math.pow(0.35, dt);
+    m.pos += m.vel * dt;
+    if (m.pos < 0) { m.pos = 0; m.vel = -m.vel * 0.35; }
+    if (m.pos > 1 - m.zone) { m.pos = 1 - m.zone; m.vel = 0; }
+    // fish
+    m.tt -= dt;
+    if (m.tt <= 0) { m.target = Math.random(); m.tt = rand(0.35, 1.3) * (1.25 - m.diff * 0.6); }
+    const spd = 0.6 + m.diff * 3.2;
+    m.fv += ((m.target - m.fish) * spd - m.fv) * Math.min(1, dt * (2 + m.diff * 5));
+    m.fish = Math.max(0.02, Math.min(0.98, m.fish + m.fv * dt + Math.sin(time * (6 + m.diff * 10)) * m.diff * 0.004));
+    const inZone = m.fish >= m.pos && m.fish <= m.pos + m.zone;
+    m.prog += (inZone ? 0.36 * (m.heavy ? 0.7 : 1) : -(0.2 + m.diff * 0.12)) * dt;
+    if (inZone && Math.random() < dt * 14) Snd.tick();
+    P.hookY = m.startY * (1 - Math.max(0, m.prog) * 0.55);
+    if (m.prog >= 1) { phase = 'land'; Snd.catch(P.catch.sp.rarity === FABLED ? 8 : P.catch.sp.rarity); }
+    else if (m.prog <= 0) fail(m.heavy ? '💥 The line snapped! Try a stronger rod.' : 'It got away! Keep the green bar on the fish.');
+  }
+
+  function landed() {
+    const { sp, kg } = P.catch;
+    const v = catchValue(sp, kg, L.tier);
+    const isNew = !S.dex[sp.id];
+    const d = S.dex[sp.id] || (S.dex[sp.id] = { n: 0, kg: 0 });
+    d.n++; if (kg > d.kg) d.kg = +kg.toFixed(4);
+    S.stats.catches++;
+    if (sp.rarity === FABLED) S.stats.fabled++;
+    if (!S.stats.best || v > S.stats.best.v) S.stats.best = { id: sp.id, v, kg };
+    const item = { id: sp.id, kg: +kg.toFixed(4), v };
+    resetPhase();
+    if (S.quick && !isNew && sp.rarity < 2) {
+      S.bucket.push(item);
+      toast('+ ' + esc(sp.name) + ' ' + rtag(sp.rarity) + ' ' + kgs(kg) + ' · ' + money(v), 'good');
+    } else {
+      showCard(item, isNew);
+    }
+    if (sp.rarity >= 4) confetti(sp.rarity === FABLED ? 160 : 70);
+    updateHUD(); save();
+  }
+
+  // ---------------- particles ----------------
+  function splash(x, y) { for (let i = 0; i < 22; i++) particles.push({ x, y, vx: rand(-160, 160), vy: rand(-380, -120), g: 900, t: 0, life: rand(0.5, 0.9), kind: 'drop', r: rand(2, 5) }); }
+  function bubble(x, y) { particles.push({ x: x + rand(-8, 8), y, vx: rand(-10, 10), vy: rand(-90, -40), g: 0, t: 0, life: rand(0.8, 1.6), kind: 'bubble', r: rand(2, 5) }); }
+  function confetti(n) { for (let i = 0; i < n; i++) particles.push({ screen: true, x: W / 2 + rand(-60, 60), y: H * 0.45, vx: rand(-420, 420), vy: rand(-700, -150), g: 650, t: 0, life: rand(1.6, 3), kind: 'conf', r: rand(4, 8), c: 'hsl(' + Math.floor(rand(0, 360)) + ',90%,60%)', rot: rand(0, 6) }); }
+
+  // ---------------- rendering ----------------
+  function drawCritter(sp, x, y, size, dir, t, rotExtra) {
+    const m = Art.motion(sp.art, t);
+    ctx.save();
+    ctx.translate(x + m.dx * K, y + m.dy * K);
+    ctx.scale(dir, 1);
+    ctx.rotate(m.rot + (rotExtra || 0));
+    Art.creature(ctx, sp, size, t);
+    ctx.restore();
+  }
+
+  function render() {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const sy = surfY();
+    if (sy > 0) Art.backdrop(ctx, L, W, sy, time);
+    Art.water(ctx, L, W, H, cam.y, waterPx, time);
+    const by = waterPx - cam.y;
+    if (by < H + 60) Art.seabed(ctx, L, W, by, time);
+
+    // critters
+    for (const c of critters) {
+      const y = c.y - cam.y;
+      if (y < sy - 10 || y < -c.size || y > H + c.size) continue;
+      drawCritter(c.sp, c.x, y, c.size, c.dir, time + c.t0);
+    }
+
+    // biter
+    const B = P.biter;
+    if (B && P.catch && (phase === 'wait' || phase === 'bite' || phase === 'reel' || phase === 'land' || (phase === 'retrieve' && B.flee))) {
+      if (phase === 'retrieve') { B.x += (B.dir > 0 ? -1 : 1) * 600 * (1 / 60); B.fleeing = true; }
+      let bx = B.x, byy = P.hookY - cam.y, extraRot = 0;
+      if (phase === 'reel') { bx = P.x - B.dir * B.size * 0.45 + Math.sin(time * 25) * 6 * K; extraRot = Math.sin(time * 18) * 0.25; }
+      if (phase === 'land') { bx = P.x; extraRot = -Math.PI / 2 * B.dir; byy += B.size * 0.4; }
+      const fleeDir = phase === 'retrieve' ? -B.dir : B.dir;
+      drawCritter(P.catch.sp, bx, byy, B.size, fleeDir, time, extraRot);
+    }
+
+    Art.surface(ctx, L, W, sy, time);
+    // fisher + rod pose
+    let pose = -1.05;
+    if (phase === 'charge') pose = -1.05 - P.p * 0.9;
+    else if (phase === 'cast') pose = -2.0 + Math.min(1, P.t / 0.18) * 1.55;
+    else if (phase === 'bite') pose = -0.6 + Math.sin(time * 30) * 0.08;
+    else if (phase === 'reel') pose = -0.8 + Math.sin(time * 12) * 0.05 * (P.mg.diff + 0.3);
+    else if (phase !== 'idle') pose = -0.55;
+    const fx = fisherX();
+    const tip = sy > -300 ? Art.fisher(ctx, L, fx, sy, K, time, pose, RODS[S.rod]) : { x: fx + 60 * K, y: sy - 160 * K };
+
+    // line, bobber, hook
+    ctx.save(); ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 1.5;
+    if (phase === 'cast') {
+      const q = Math.min(1, P.t / P.dur), bx = tip.x + (P.tx - tip.x) * q, byy = tip.y + (sy - tip.y) * q - Math.sin(q * Math.PI) * 140 * K;
+      ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.quadraticCurveTo((tip.x + bx) / 2, Math.min(tip.y, byy) - 20, bx, byy); ctx.stroke();
+      Art.bobber(ctx, bx, byy, K, time, false);
+    } else if (phase !== 'idle' && phase !== 'charge' && phase !== 'leap') {
+      const hy = P.hookY - cam.y;
+      ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.quadraticCurveTo((tip.x + P.x) / 2, sy - 10, P.x, sy); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(P.x, sy); ctx.lineTo(P.x + Math.sin(time * 2) * 3, hy); ctx.stroke();
+      Art.bobber(ctx, P.x, sy, K, time, phase === 'bite' || phase === 'reel');
+      if (phase !== 'land' && phase !== 'reel') Art.hook(ctx, P.x, hy, K, BAITS[S.bait]);
+    } else if (phase === 'idle' || phase === 'charge') {
+      ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(tip.x + 2, tip.y + 40 * K); ctx.stroke();
+      Art.hook(ctx, tip.x + 2, tip.y + 46 * K, K, BAITS[S.bait]);
+    }
+    ctx.restore();
+
+    // leap
+    if (phase === 'leap') {
+      const q = Math.min(1, P.lt / 0.75), sp = P.catch.sp, sz = P.biter.size;
+      const x = P.x + (W / 2 - P.x) * q, y = sy - Math.sin(q * Math.PI * 0.9) * 220 * K - (H * 0.15) * q;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(-0.5 + q * 6.8); ctx.scale(1 + q * 0.6, 1 + q * 0.6); Art.creature(ctx, sp, sz, time); ctx.restore();
+    }
+
+    // particles
+    for (const p of particles) {
+      const x = p.x, y = p.screen ? p.y : p.y - cam.y, a = 1 - p.t / p.life;
+      ctx.globalAlpha = Math.max(0, a);
+      if (p.kind === 'drop') { ctx.fillStyle = '#e8f8ff'; ctx.beginPath(); ctx.arc(x, y, p.r, 0, 6.3); ctx.fill(); }
+      else if (p.kind === 'bubble') { ctx.strokeStyle = 'rgba(230,250,255,0.9)'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(x, y, p.r, 0, 6.3); ctx.stroke(); }
+      else { ctx.save(); ctx.translate(x, y); ctx.rotate(p.rot + p.t * 8); ctx.fillStyle = p.c; ctx.fillRect(-p.r, -p.r * 0.4, p.r * 2, p.r * 0.8); ctx.restore(); }
+    }
+    ctx.globalAlpha = 1;
+
+    drawGauge(sy);
+    if (phase === 'charge') drawPower(fx, sy);
+    if (phase === 'bite') drawBang(P.x, sy);
+    if (phase === 'reel') drawReel();
+  }
+
+  function drawGauge(sy) {
+    const x = 14, top = Math.max(110, Math.min(H * 0.6, sy + 40)), h = Math.min(H - top - 110, 320), w = 16;
+    if (h < 60) return;
+    ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = '#1d2235';
+    const g = ctx.createLinearGradient(0, top, 0, top + h); g.addColorStop(0, Art.THEMES[L.theme].water[0]); g.addColorStop(1, Art.THEMES[L.theme].water[1]);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, top, w, h, 8) : ctx.rect(x, top, w, h); ctx.fill(); ctx.stroke();
+    const ry = top + h * Math.min(1, RODS[S.rod].depth / L.maxDepth);
+    ctx.setLineDash([4, 3]); ctx.strokeStyle = '#ffd23f'; ctx.beginPath(); ctx.moveTo(x - 4, ry); ctx.lineTo(x + w + 4, ry); ctx.stroke(); ctx.setLineDash([]);
+    ctx.font = '800 11px Nunito, sans-serif'; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 3;
+    const lab = (s, y) => { ctx.strokeText(s, x + w + 6, y + 4); ctx.fillText(s, x + w + 6, y + 4); };
+    lab('0 m', top); lab(meters(L.maxDepth), top + h);
+    if (RODS[S.rod].depth < L.maxDepth) lab('rod ' + meters(RODS[S.rod].depth), ry);
+    if (P.hookY != null && phase !== 'idle') {
+      const d = P.hookY / ppm, hy = top + h * Math.min(1, d / L.maxDepth);
+      ctx.fillStyle = '#ff3b3b'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(x + w / 2, hy, 7, 0, 6.3); ctx.fill(); ctx.stroke();
+      ctx.font = '900 13px Nunito, sans-serif'; ctx.fillStyle = '#fff'; ctx.lineWidth = 3; ctx.strokeText(meters(d), x + w + 6, hy - 10); ctx.fillText(meters(d), x + w + 6, hy - 10);
+    }
+    ctx.restore();
+  }
+
+  function drawPower(fx, sy) {
+    const w = 150 * K, h = 18 * K, x = fx - w / 2 + 20 * K, y = sy - 200 * K;
+    ctx.save(); ctx.lineWidth = 3; ctx.strokeStyle = '#1d2235';
+    ctx.fillStyle = '#fff8e7'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x, y, w, h, 9) : ctx.rect(x, y, w, h); ctx.fill(); ctx.stroke();
+    const g = ctx.createLinearGradient(x, 0, x + w, 0); g.addColorStop(0, '#3fbf4f'); g.addColorStop(0.6, '#ffd23f'); g.addColorStop(1, '#ff4d5e');
+    ctx.fillStyle = g; ctx.fillRect(x + 3, y + 3, (w - 6) * P.p, h - 6);
+    ctx.font = "900 " + Math.round(14 * K + 2) + "px Nunito, sans-serif"; ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.lineWidth = 4;
+    const s = 'Depth ' + meters(Math.max(0.3, P.p * maxCast()));
+    ctx.strokeText(s, x + w / 2, y - 8); ctx.fillText(s, x + w / 2, y - 8);
+    ctx.restore();
+  }
+
+  function drawBang(x, sy) {
+    const s = 1 + Math.sin(time * 20) * 0.12;
+    ctx.save(); ctx.translate(x, sy - 60 * K); ctx.scale(s, s);
+    ctx.fillStyle = '#ffd23f'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, 0, 28 * K, 0, 6.3); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1d2235'; ctx.font = "900 " + Math.round(40 * K) + "px 'Lilita One', sans-serif"; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('!', 0, 2);
+    ctx.restore();
+    ctx.save(); ctx.font = "900 " + Math.round(22 * K + 4) + "px 'Lilita One', sans-serif"; ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 5;
+    const ty = Math.min(H * 0.3, sy - 110 * K) ; ctx.strokeText('TAP NOW!', W / 2, Math.max(120, ty)); ctx.fillText('TAP NOW!', W / 2, Math.max(120, ty));
+    const q = 1 - P.bt / P.window; ctx.fillStyle = '#ff4d5e'; ctx.fillRect(W / 2 - 60, Math.max(120, ty) + 10, 120 * q, 8); ctx.strokeRect(W / 2 - 60, Math.max(120, ty) + 10, 120, 8);
+    ctx.restore();
+  }
+
+  function drawReel() {
+    const m = P.mg, bh = Math.min(H * 0.55, 380), bw = 54 * Math.max(0.85, K), x = P.x > W * 0.55 ? 60 + 40 * K : W - bw - 70 * Math.max(0.8, K), y = H * 0.5 - bh / 2 - 20;
+    ctx.save(); ctx.lineWidth = 4; ctx.strokeStyle = '#1d2235';
+    ctx.fillStyle = '#b07a46'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - 10, y - 10, bw + 20, bh + 20, 16) : ctx.rect(x - 10, y - 10, bw + 20, bh + 20); ctx.fill(); ctx.stroke();
+    const g = ctx.createLinearGradient(0, y, 0, y + bh); g.addColorStop(0, '#5ad1ff'); g.addColorStop(1, '#0d3a66');
+    ctx.fillStyle = g; ctx.fillRect(x, y, bw, bh); ctx.strokeRect(x, y, bw, bh);
+    // zone
+    const zy = y + bh * (1 - m.pos - m.zone), zh = bh * m.zone;
+    const inZone = m.fish >= m.pos && m.fish <= m.pos + m.zone;
+    ctx.fillStyle = inZone ? 'rgba(120,255,120,0.75)' : 'rgba(120,255,120,0.45)'; ctx.fillRect(x + 3, zy, bw - 6, zh); ctx.strokeRect(x + 3, zy, bw - 6, zh);
+    // fish marker
+    const fy = y + bh * (1 - m.fish), sp = P.catch.sp, rc = sp.rarity === FABLED ? 'hsl(' + ((time * 200) % 360) + ',90%,60%)' : RARITIES[sp.rarity].color;
+    ctx.save(); ctx.translate(x + bw / 2, fy); ctx.rotate(Math.sin(time * 14) * 0.3);
+    ctx.fillStyle = rc; ctx.beginPath(); ctx.ellipse(0, 0, 17, 11, 0, 0, 6.3); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-25, -9); ctx.lineTo(-25, 9); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(7, -3, 4, 0, 6.3); ctx.fill(); ctx.fillStyle = '#1d2235'; ctx.beginPath(); ctx.arc(8, -3, 2, 0, 6.3); ctx.fill();
+    ctx.restore();
+    // progress
+    const px = x + bw + 16, pw = 14;
+    ctx.fillStyle = '#fff8e7'; ctx.fillRect(px, y, pw, bh); ctx.strokeRect(px, y, pw, bh);
+    const pr = Math.max(0, Math.min(1, m.prog));
+    ctx.fillStyle = pr > 0.66 ? '#3fbf4f' : pr > 0.33 ? '#ffd23f' : '#ff4d5e'; ctx.fillRect(px + 2, y + bh * (1 - pr), pw - 4, bh * pr);
+    ctx.font = "900 " + Math.round(16 * K + 4) + "px 'Lilita One', sans-serif"; ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.lineWidth = 5;
+    const t1 = holding ? 'REEL!' : 'HOLD TO REEL';
+    ctx.strokeText(t1, x + bw / 2 + 10, y - 22); ctx.fillText(t1, x + bw / 2 + 10, y - 22);
+    if (m.heavy) { ctx.fillStyle = '#ffd23f'; ctx.strokeText('HEAVY!', x + bw / 2 + 10, y + bh + 40); ctx.fillText('HEAVY!', x + bw / 2 + 10, y + bh + 40); }
+    ctx.restore();
+  }
+
+  // ---------------- loop ----------------
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now;
+    update(dt); render();
+    if (!$('#card').classList.contains('hidden')) drawCard();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------------- input ----------------
+  function down(e) {
+    Snd.unlock();
+    if (e && e.target !== cv) return;
+    holding = true;
+    if (phase === 'idle') startCharge();
+    else if (phase === 'bite') hookIt();
+  }
+  function up() {
+    holding = false;
+    if (phase === 'charge') releaseCast();
+  }
+  cv.addEventListener('pointerdown', (e) => { e.preventDefault(); down(e); });
+  window.addEventListener('pointerup', up);
+  window.addEventListener('pointercancel', up);
+  window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space' || e.repeat) return;
+    if (!$('#modal').classList.contains('hidden') || !$('#card').classList.contains('hidden')) return;
+    e.preventDefault(); Snd.unlock(); holding = true;
+    if (phase === 'idle') startCharge(); else if (phase === 'bite') hookIt();
+  });
+  window.addEventListener('keyup', (e) => { if (e.code === 'Space') up(); });
+
+  // ---------------- HUD ----------------
+  function updateHUD() {
+    $('#money').textContent = money(S.money).slice(1);
+    $('#locName').textContent = L.name;
+    $('#gearLine').textContent = RODS[S.rod].name + ' · ' + BAITS[S.bait].name;
+    $('#bucketCount').textContent = S.bucket.length;
+  }
+  function toast(html, cls, ms) {
+    const el = document.createElement('div'); el.className = 'toast ' + (cls || ''); el.innerHTML = html;
+    const box = $('#toasts'); box.appendChild(el);
+    while (box.children.length > 4) box.removeChild(box.firstChild);
+    setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 350); }, ms || 2600);
+  }
+
+  // ---------------- icons ----------------
+  function iconCanvas(sp, w, h, silhouette, scale) {
+    const c = document.createElement('canvas'); const d = Math.min(2, window.devicePixelRatio || 1);
+    c.width = w * d; c.height = h * d;
+    const x = c.getContext('2d'); x.scale(d, d); x.translate(w / 2, h / 2 + (sp.art.arch === 'coral' || sp.art.arch === 'barnacle' ? -h * 0.08 : 0));
+    const big = ['seahorse', 'octopus', 'kraken', 'santa', 'alien', 'poseidon', 'coral', 'sponge', 'barnacle', 'urchin', 'starfish', 'bubblebuddy', 'plankton', 'seaspider'];
+    const sz = Math.min(w * 0.82, h * (big.indexOf(sp.art.arch) >= 0 ? 0.75 : sp.art.arch === 'plesiosaur' ? 0.9 : 1.5)) * (scale || 1);
+    Art.creature(x, sp, sz, 1.3, { noFx: true });
+    if (silhouette) { x.setTransform(1, 0, 0, 1, 0, 0); x.globalCompositeOperation = 'source-in'; x.fillStyle = '#34405e'; x.fillRect(0, 0, c.width, c.height); }
+    return c;
+  }
+  function rodIcon(rod) {
+    const c = document.createElement('canvas'); c.width = 128; c.height = 128; const x = c.getContext('2d'); x.scale(2, 2);
+    x.lineCap = 'round'; x.strokeStyle = '#1d2235'; x.lineWidth = 7; x.beginPath(); x.moveTo(12, 54); x.lineTo(54, 10); x.stroke();
+    x.lineWidth = 4; x.strokeStyle = rod.id === 0 ? '#8a6a3a' : rod.metal ? 'hsl(' + rod.hue + ',70%,60%)' : 'hsl(' + rod.hue + ',55%,45%)'; x.stroke();
+    x.strokeStyle = 'rgba(255,255,255,.8)'; x.lineWidth = 1; x.beginPath(); x.moveTo(54, 10); x.lineTo(56, 40); x.stroke();
+    x.fillStyle = '#aab'; x.strokeStyle = '#1d2235'; x.lineWidth = 2; x.beginPath(); x.arc(22, 46, 6, 0, 6.3); x.fill(); x.stroke();
+    if (rod.id >= 31) { x.fillStyle = '#fff6b0'; x.beginPath(); x.arc(54, 10, 4, 0, 6.3); x.fill(); }
+    return c;
+  }
+  function baitIcon(b) {
+    const c = document.createElement('canvas'); c.width = 128; c.height = 128; const x = c.getContext('2d'); x.scale(2, 2);
+    x.strokeStyle = '#1d2235'; x.lineWidth = 2.5; x.lineCap = 'round';
+    x.fillStyle = 'hsl(' + b.hue + ',75%,58%)';
+    x.beginPath(); for (let i = 0; i <= 12; i++) { const q = i / 12; const px = 12 + q * 40, py = 34 + Math.sin(q * 7 + b.id) * 7; i ? x.lineTo(px, py) : x.moveTo(px, py); } x.lineWidth = 12; x.stroke(); x.lineWidth = 8; x.strokeStyle = x.fillStyle; x.stroke();
+    x.fillStyle = '#1d2235'; x.beginPath(); x.arc(50, 34 + Math.sin(7 + b.id) * 7 - 2, 1.8, 0, 6.3); x.fill();
+    if (b.id >= 20) { Art.star(x, 52, 14, 6, '#ffe66b'); }
+    return c;
+  }
+  function locIcon(loc) {
+    const c = document.createElement('canvas'); c.width = 220; c.height = 144; const x = c.getContext('2d'); x.scale(220 / 440, 144 / 288);
+    Art.backdrop(x, loc, 440, 170, 1); Art.water(x, loc, 440, 288, -170, 400, 1); Art.surface(x, loc, 440, 170, 1);
+    return c;
+  }
+
+  // ---------------- modal ----------------
+  let modalKind = null, modalTab = null;
+  const modal = $('#modal');
+  function openModal(kind, tab) {
+    if (phase !== 'idle' && phase !== 'charge') { toast('Finish your cast first!', 'bad'); return; }
+    holding = false; if (phase === 'charge') resetPhase();
+    modalKind = kind; modalTab = tab || null; modal.classList.remove('hidden'); Snd.click(); renderModal();
+  }
+  function closeModal() { modal.classList.add('hidden'); modalKind = null; }
+  $('#modalClose').onclick = closeModal;
+  modal.addEventListener('pointerdown', (e) => { if (e.target === modal) closeModal(); });
+  document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openModal(b.dataset.open)));
+  function tabs(list) {
+    const el = $('#modalTabs'); el.innerHTML = '';
+    if (!list) return;
+    if (!modalTab) modalTab = list[0][0];
+    list.forEach(([k, label]) => { const b = document.createElement('button'); b.className = 'tab' + (modalTab === k ? ' on' : ''); b.textContent = label; b.onclick = () => { modalTab = k; dexPage = 0; renderModal(); }; el.appendChild(b); });
+  }
+  function renderModal() {
+    const body = $('#modalBody'); body.innerHTML = ''; body.scrollTop = 0;
+    if (modalKind === 'shop') { $('#modalTitle').textContent = 'Tackle Shop'; tabs([['rods', '🎣 Rods'], ['bait', '🪱 Bait']]); renderShop(body); }
+    else if (modalKind === 'map') { $('#modalTitle').textContent = 'Travel'; tabs(null); renderMap(body); }
+    else if (modalKind === 'bucket') { $('#modalTitle').textContent = 'Your Bucket'; tabs(null); renderBucket(body); }
+    else if (modalKind === 'dex') { $('#modalTitle').textContent = 'Fishdex'; tabs(null); renderDex(body); }
+    else if (modalKind === 'settings') { $('#modalTitle').textContent = 'Settings & Stats'; tabs(null); renderSettings(body); }
+  }
+  function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+
+  function renderShop(body) {
+    const isRod = modalTab === 'rods';
+    body.appendChild(el('p', 'info', isRod ? 'Longer rods reach deeper water (bigger, pricier creatures). Stronger rods hold heavier catches.' : 'Better bait attracts rarer creatures, bites faster and boosts your odds of a Fabled legend.'));
+    const grid = el('div', 'grid'); body.appendChild(grid);
+    const list = isRod ? RODS : BAITS, owned = isRod ? S.rods : S.baits, cur = isRod ? S.rod : S.bait;
+    const firstLocked = list.findIndex((g) => owned.indexOf(g.id) < 0);
+    list.forEach((g) => {
+      const own = owned.indexOf(g.id) >= 0, eq = cur === g.id;
+      const hidden = !own && firstLocked >= 0 && g.id > firstLocked + 5;
+      const card = el('div', 'item' + (eq ? ' equipped' : own ? ' owned' : ''));
+      card.appendChild(isRod ? rodIcon(g) : baitIcon(g));
+      const fc = fabledChance(isRod ? g.id : S.rod, isRod ? S.bait : g.id, S.loc);
+      const stats = isRod ? 'Reach ' + meters(g.depth) + ' · Holds ' + kgs(g.cap) + '<br>Reel grip ' + Math.round(g.reel * 100) + '%'
+        : 'Luck ×' + g.luck.toFixed(2) + ' · Bites ' + Math.round((1 / g.bite - 1) * 100) + '% faster<br>Fabled odds here ' + (fc * 100).toFixed(fc < 0.001 ? 3 : 2) + '%';
+      const t = el('div', 'txt', '<div class="nm">' + (hidden ? '???' : esc(g.name)) + '</div><div class="st">' + (hidden ? 'Keep fishing to reveal…' : stats) + '</div>');
+      const b = el('button', 'btn small ' + (eq ? 'gray' : own ? 'blue' : 'green'), eq ? 'Equipped' : own ? 'Equip' : 'Buy ' + money(g.price));
+      b.disabled = eq || (!own && S.money < g.price);
+      b.onclick = () => {
+        if (!own) { if (S.money < g.price) return; S.money -= g.price; owned.push(g.id); Snd.cash(); toast('Bought ' + esc(g.name) + '!', 'good'); }
+        else Snd.click();
+        if (isRod) S.rod = g.id; else S.bait = g.id;
+        save(); updateHUD(); renderModal();
+      };
+      t.appendChild(b); card.appendChild(t); grid.appendChild(card);
+    });
+  }
+
+  function renderMap(body) {
+    body.appendChild(el('p', 'info', 'Each new spot has bigger, rarer, more valuable creatures — and deeper water.'));
+    const grid = el('div', 'grid'); body.appendChild(grid);
+    const firstLocked = LOCATIONS.findIndex((l) => S.locs.indexOf(l.tier) < 0);
+    LOCATIONS.forEach((l) => {
+      const own = S.locs.indexOf(l.tier) >= 0, here = S.loc === l.tier, hidden = !own && firstLocked >= 0 && l.tier > firstLocked + 2;
+      const card = el('div', 'item loccard' + (here ? ' equipped' : own ? ' owned' : ''));
+      card.appendChild(hidden ? el('canvas') : locIcon(l));
+      const got = POOLS[l.tier].filter((s) => S.dex[s.id]).length;
+      const t = el('div', 'txt', '<div class="nm">' + (hidden ? '??? Mystery Waters' : esc(l.name)) + '</div><div class="st">' + (hidden ? 'Rumors only…' : esc(l.desc) + '<br>Depth ' + meters(l.maxDepth) + ' · ' + got + '/' + POOLS[l.tier].length + ' found') + '</div>');
+      const b = el('button', 'btn small ' + (here ? 'gray' : own ? 'blue' : 'green'), here ? 'You are here' : own ? 'Travel' : 'Buy ' + money(l.price));
+      b.disabled = here || (!own && S.money < l.price);
+      b.onclick = () => {
+        if (!own) { if (S.money < l.price) return; S.money -= l.price; S.locs.push(l.tier); Snd.cash(); toast('Unlocked ' + esc(l.name) + '!', 'gold'); }
+        S.loc = l.tier; setupLoc(); save(); updateHUD(); closeModal();
+        toast('🧭 Welcome to ' + esc(l.name) + '!', 'good');
+      };
+      t.appendChild(b); card.appendChild(t); grid.appendChild(card);
+    });
+  }
+
+  function sellItems(pred) {
+    let tot = 0, n = 0; const keep = [];
+    for (const it of S.bucket) { if (pred(it)) { tot += it.v; n++; } else keep.push(it); }
+    if (!n) return;
+    S.bucket = keep; S.money += tot; S.stats.earned += tot; Snd.cash();
+    toast('💰 Sold ' + n + ' for ' + money(tot), 'good'); save(); updateHUD();
+  }
+  function renderBucket(body) {
+    const total = S.bucket.reduce((a, b) => a + b.v, 0);
+    const bar = el('div', 'toolbar');
+    bar.appendChild(el('div', 'info', S.bucket.length + ' catches · worth ' + money(total)));
+    const b1 = el('button', 'btn small green', 'Sell All'); b1.onclick = () => { sellItems(() => true); renderModal(); };
+    const b2 = el('button', 'btn small orange', 'Sell below Epic'); b2.onclick = () => { sellItems((it) => BY_ID[it.id].rarity < 3); renderModal(); };
+    const b3 = el('button', 'btn small blue', 'Sell Junk'); b3.onclick = () => { sellItems((it) => BY_ID[it.id].arch === 'junk'); renderModal(); };
+    bar.appendChild(b1); bar.appendChild(b2); bar.appendChild(b3); body.appendChild(bar);
+    if (!S.bucket.length) { body.appendChild(el('p', 'info', 'Your bucket is empty. Go catch something!')); return; }
+    const rows = el('div', 'rows'); body.appendChild(rows);
+    const sorted = S.bucket.map((it, i) => [it, i]).sort((a, b) => b[0].v - a[0].v);
+    sorted.slice(0, 250).forEach(([it]) => {
+      const sp = BY_ID[it.id];
+      const r = el('div', 'row');
+      r.appendChild(iconCanvas(sp, 52, 40));
+      r.appendChild(el('div', 'nm', esc(sp.name) + ' ' + rtag(sp.rarity) + '<small>' + sp.cat + ' · ' + kgs(it.kg) + '</small>'));
+      r.appendChild(el('div', 'val', money(it.v)));
+      const b = el('button', 'btn small green', 'Sell'); b.onclick = () => { sellItems((x) => x === it); renderModal(); };
+      r.appendChild(b); rows.appendChild(r);
+    });
+    if (sorted.length > 250) body.appendChild(el('p', 'info', '…and ' + (sorted.length - 250) + ' smaller catches.'));
+  }
+
+  // Fishdex
+  const DEX_GROUPS = LOCATIONS.map((l) => ({ name: l.name, list: POOLS[l.tier] })).concat([{ name: '✨ Fabled Legends', list: GLOBAL.fabled }, { name: '🥾 Junk & Plankton (anywhere)', list: GLOBAL.junk.concat(GLOBAL.plankton) }]);
+  let dexGroup = 0, dexCat = 'all', dexRar = 'all', dexPage = 0;
+  function renderDex(body) {
+    const found = Object.keys(S.dex).length;
+    body.appendChild(el('div', 'info', '📖 Discovered ' + found.toLocaleString() + ' / ' + SPECIES.length.toLocaleString() + ' species'));
+    const pr = el('div', 'progress'); pr.appendChild(el('div')); pr.firstChild.style.width = (found / SPECIES.length * 100).toFixed(2) + '%'; body.appendChild(pr);
+    const f = el('div', 'filters'); body.appendChild(f);
+    const sg = el('select'); DEX_GROUPS.forEach((g, i) => { const o = el('option', null, esc(g.name) + ' (' + g.list.filter((s) => S.dex[s.id]).length + '/' + g.list.length + ')'); o.value = i; if (i === dexGroup) o.selected = true; sg.appendChild(o); });
+    sg.onchange = () => { dexGroup = +sg.value; dexCat = 'all'; dexPage = 0; renderModal(); };
+    const group = DEX_GROUPS[dexGroup].list;
+    const cats = Array.from(new Set(group.map((s) => s.cat)));
+    const sc = el('select'); [['all', 'All creatures']].concat(cats.map((c) => [c, c])).forEach(([v, n]) => { const o = el('option', null, n); o.value = v; if (v === dexCat) o.selected = true; sc.appendChild(o); });
+    sc.onchange = () => { dexCat = sc.value; dexPage = 0; renderModal(); };
+    const sr = el('select'); [['all', 'All rarities']].concat(RARITIES.map((r, i) => [String(i), r.name])).forEach(([v, n]) => { const o = el('option', null, n); o.value = v; if (v === dexRar) o.selected = true; sr.appendChild(o); });
+    sr.onchange = () => { dexRar = sr.value; dexPage = 0; renderModal(); };
+    f.appendChild(sg); f.appendChild(sc); f.appendChild(sr);
+    const list = group.filter((s) => (dexCat === 'all' || s.cat === dexCat) && (dexRar === 'all' || s.rarity === +dexRar));
+    const PER = 40, pages = Math.max(1, Math.ceil(list.length / PER)); dexPage = Math.min(dexPage, pages - 1);
+    const grid = el('div', 'dexgrid'); body.appendChild(grid);
+    list.slice(dexPage * PER, dexPage * PER + PER).forEach((sp) => {
+      const d = S.dex[sp.id];
+      const card = el('div', 'dex' + (d ? '' : ' unk'));
+      const bar = el('div', 'bar'); bar.style.background = sp.rarity === FABLED ? 'linear-gradient(90deg,#ff4d5e,#ffd23f,#3fbf4f,#2f8cf0,#a43be0)' : RARITIES[sp.rarity].color; card.appendChild(bar);
+      card.appendChild(iconCanvas(sp, 110, 76, !d));
+      card.appendChild(el('div', 'nm', d ? esc(sp.name) : '???'));
+      card.onclick = () => {
+        if (!d) { toast('??? — ' + RARITIES[sp.rarity].name + ' ' + sp.cat + (sp.loc >= 0 ? ' · found deeper than ' + meters(sp.depth * LOCATIONS[sp.loc].maxDepth) : ''), '', 3000); return; }
+        toast('<b>' + esc(sp.name) + '</b> ' + rtag(sp.rarity) + '<br>Caught ' + d.n + '× · Biggest ' + kgs(d.kg) + (sp.loc >= 0 ? ' · Depth ' + meters(sp.depth * LOCATIONS[sp.loc].maxDepth) + '+' : ''), '', 3500);
+      };
+      grid.appendChild(card);
+    });
+    if (pages > 1) {
+      const pg = el('div', 'pager');
+      const prev = el('button', 'btn small blue', '◀'); prev.disabled = dexPage === 0; prev.onclick = () => { dexPage--; renderModal(); };
+      const next = el('button', 'btn small blue', '▶'); next.disabled = dexPage >= pages - 1; next.onclick = () => { dexPage++; renderModal(); };
+      pg.appendChild(prev); pg.appendChild(el('span', null, 'Page ' + (dexPage + 1) + ' / ' + pages)); pg.appendChild(next); body.appendChild(pg);
+    }
+  }
+
+  function renderSettings(body) {
+    const st = S.stats;
+    const best = st.best && BY_ID[st.best.id];
+    const s = el('div', 'stats');
+    [['Casts', st.casts.toLocaleString()], ['Catches', st.catches.toLocaleString()], ['Money earned', money(st.earned)], ['Species found', Object.keys(S.dex).length.toLocaleString()], ['Fabled caught', st.fabled], ['Lines snapped', st.snaps], ['Best catch', best ? esc(best.name) + ' (' + money(st.best.v) + ')' : '—']]
+      .forEach(([k, v]) => s.appendChild(el('div', 'stat', k + '<b>' + v + '</b>')));
+    body.appendChild(s);
+    const box = el('div', 'settings'); box.style.marginTop = '14px'; body.appendChild(box);
+    const mk = (label, key) => { const l = el('label'); const c = el('input'); c.type = 'checkbox'; c.checked = !!S[key]; c.onchange = () => { S[key] = c.checked; save(); }; l.appendChild(c); l.appendChild(document.createTextNode(label)); box.appendChild(l); };
+    mk('🔊 Sound effects', 'sound');
+    mk('⚡ Quick mode — skip the big catch card for Common & Uncommon creatures you already know', 'quick');
+    const r = el('button', 'btn red', '🗑️ Reset all progress');
+    r.onclick = () => { if (confirm('Erase ALL progress and start over with the raggity old stick?')) { S = fresh(); save(); setupLoc(); updateHUD(); closeModal(); $('#hint').classList.remove('hidden'); } };
+    box.appendChild(r);
+    body.appendChild(el('p', 'info', '<br>Fishing Tycoon · ' + SPECIES.length.toLocaleString() + ' species across ' + LOCATIONS.length + ' locations, ' + RODS.length + ' rods and ' + BAITS.length + ' baits.'));
+  }
+
+  // ---------------- catch card ----------------
+  let cardItem = null;
+  const cardCv = $('#cardCanvas'), cardCtx = cardCv.getContext('2d');
+  function showCard(item, isNew) {
+    cardItem = item; const sp = BY_ID[item.id], R = RARITIES[sp.rarity];
+    $('#card').classList.remove('hidden');
+    $('#card .catch').classList.toggle('fabled', sp.rarity === FABLED);
+    $('#cardBadge').classList.toggle('hidden', !isNew);
+    const rr = $('#cardRarity'); rr.textContent = sp.rarity === FABLED ? '✨ FABLED ✨' : R.name; rr.style.background = sp.rarity === FABLED ? 'linear-gradient(90deg,#ff4d5e,#ffd23f,#3fbf4f,#2f8cf0,#a43be0)' : R.color;
+    const nm = $('#cardName'); nm.textContent = sp.name; nm.className = sp.rarity === FABLED ? 'rainbowtext' : '';
+    $('#cardMeta').innerHTML = '<span>⚖️ ' + kgs(item.kg) + '</span><span>💰 ' + money(item.v) + '</span><span>🏷️ ' + sp.cat + '</span>';
+    $('#cardBlurb').textContent = sp.blurb || (isNew ? 'A brand-new discovery for your Fishdex!' : 'Caught ' + S.dex[sp.id].n + ' times so far.');
+    $('#cardSell').textContent = 'Sell ' + money(item.v);
+    if (sp.rarity === FABLED) { Snd.fabled(); toast('🌟 FABLED CATCH! You caught ' + esc(sp.name) + '!', 'gold', 5000); }
+  }
+  function drawCard() {
+    if (!cardItem) return;
+    const sp = BY_ID[cardItem.id];
+    cardCtx.setTransform(1, 0, 0, 1, 0, 0); cardCtx.clearRect(0, 0, 600, 420);
+    const g = cardCtx.createRadialGradient(300, 210, 20, 300, 210, 300); g.addColorStop(0, sp.rarity === FABLED ? 'rgba(255,230,120,0.6)' : 'rgba(150,220,255,0.55)'); g.addColorStop(1, 'rgba(150,220,255,0)');
+    cardCtx.fillStyle = g; cardCtx.fillRect(0, 0, 600, 420);
+    cardCtx.translate(300, 215);
+    const tall = ['seahorse', 'octopus', 'kraken', 'santa', 'alien', 'poseidon', 'coral', 'sponge', 'barnacle', 'plankton', 'seaspider', 'urchin', 'bubblebuddy', 'starfish'].indexOf(sp.art.arch) >= 0;
+    const sz = tall ? 300 : sp.art.arch === 'plesiosaur' ? 380 : 430;
+    const m = Art.motion(sp.art, time);
+    cardCtx.translate(m.dx * 1.5, m.dy * 1.5); cardCtx.rotate(m.rot);
+    Art.creature(cardCtx, sp, sz, time);
+  }
+  function closeCard(sell) {
+    if (!cardItem) return;
+    if (sell) { S.money += cardItem.v; S.stats.earned += cardItem.v; Snd.cash(); toast('💰 +' + money(cardItem.v), 'good'); }
+    else { S.bucket.push(cardItem); Snd.click(); }
+    cardItem = null; $('#card').classList.add('hidden'); save(); updateHUD();
+  }
+  $('#cardSell').onclick = () => closeCard(true);
+  $('#cardKeep').onclick = () => closeCard(false);
+
+  // ---------------- boot ----------------
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1); W = window.innerWidth; H = window.innerHeight;
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); cv.style.width = W + 'px'; cv.style.height = H + 'px';
+    K = Math.max(0.62, Math.min(1.2, Math.min(W / 950, H / 720)));
+  }
+  window.addEventListener('resize', () => { const oldK = K; resize(); if (Math.abs(oldK - K) > 0.05) for (const c of critters) c.size = sizeFor(c.sp); });
+  resize();
+  setupLoc();
+  updateHUD();
+  if (!S.tut) $('#hint').classList.add('hidden');
+  document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
+  window.FTGame = { get state() { return S; }, get phase() { return phase; }, get P() { return P; }, setupLoc, updateHUD };
+  requestAnimationFrame(frame);
+})();

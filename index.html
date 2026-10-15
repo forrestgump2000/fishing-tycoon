@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Fishing Tycoon</title>
+  <meta name="description" content="Start with a raggity old rod and a dried mealworm. Catch thousands of cartoon fish, sea creatures and legends — megalodons, mermaids, krakens, Poseidon and more — and build your fishing empire.">
+  <meta name="theme-color" content="#1f78c8">
+  <link rel="icon" href="icons/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="icon" href="icons/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta property="og:title" content="Fishing Tycoon">
+  <meta property="og:description" content="Catch 8,000+ cartoon species — from soggy boots to Poseidon himself — and build your fishing empire.">
+  <meta property="og:image" content="/icons/thumbnail.png">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="/icons/thumbnail.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@600;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div id="hud">
+    <div class="top">
+      <div class="pill money"><span class="coin">$</span><span id="money">0</span></div>
+      <div class="pill locpill"><span id="locName">Muddy Pond</span><small id="gearLine"></small></div>
+    </div>
+    <div id="hint" class="hint">Hold anywhere to charge your cast — let go to throw!</div>
+    <div id="toasts"></div>
+    <nav class="bottom">
+      <button class="btn b-shop" data-open="shop"><span class="ico">🎣</span><span>Shop</span></button>
+      <button class="btn b-map" data-open="map"><span class="ico">🗺️</span><span>Travel</span></button>
+      <button class="btn b-bucket" data-open="bucket"><span class="ico">🪣</span><span>Bucket <b id="bucketCount">0</b></span></button>
+      <button class="btn b-dex" data-open="dex"><span class="ico">📖</span><span>Fishdex</span></button>
+      <button class="btn b-set" data-open="settings"><span class="ico">⚙️</span><span class="hide-sm">Settings</span></button>
+    </nav>
+  </div>
+
+  <div id="modal" class="overlay hidden" role="dialog" aria-modal="true">
+    <div class="panel">
+      <header><h2 id="modalTitle">Shop</h2><button class="close" id="modalClose" aria-label="Close">✕</button></header>
+      <div id="modalTabs" class="tabs"></div>
+      <div id="modalBody" class="body"></div>
+    </div>
+  </div>
+
+  <div id="card" class="overlay hidden" role="dialog" aria-modal="true">
+    <div class="catch">
+      <div class="burst"></div>
+      <div id="cardBadge" class="badge">NEW!</div>
+      <div id="cardRarity" class="rarity">Common</div>
+      <canvas id="cardCanvas" width="600" height="420"></canvas>
+      <h2 id="cardName">Bluegill</h2>
+      <div id="cardMeta" class="meta"></div>
+      <p id="cardBlurb" class="blurb"></p>
+      <div class="actions">
+        <button class="btn green" id="cardSell">Sell</button>
+        <button class="btn blue" id="cardKeep">Keep</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/data.js"></script>
+  <script src="js/art.js"></script>
+  <script src="js/game.js"></script>
+</body>
+</html>
