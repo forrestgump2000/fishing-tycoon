@@ -43,7 +43,7 @@
     squid: 'Squid', crab: 'Crab', lobster: 'Lobster', starfish: 'Starfish', seahorse: 'Seahorse',
     sponge: 'Sea Sponge', snail: 'Sea Snail', urchin: 'Sea Urchin', sealion: 'Sea Lion',
     seaspider: 'Sea Spider', plankton: 'Plankton', coral: 'Coral', manatee: 'Manatee',
-    barnacle: 'Barnacle', junk: 'Junk', fabled: 'Fabled'
+    barnacle: 'Barnacle', junk: 'Junk', fabled: 'Fabled', frenzy: 'Frenzy Fish'
   };
 
   // ---------- locations ----------
@@ -315,7 +315,7 @@
   const SPECIES = [];
   const BY_ID = {};
   const POOLS = LOCATIONS.map(() => []);   // per-location catchable (non-global) species
-  const GLOBAL = { plankton: [], junk: [], fabled: [] };
+  const GLOBAL = { plankton: [], junk: [], fabled: [], frenzy: [] };
 
   function addSpecies(sp) { SPECIES.push(sp); BY_ID[sp.id] = sp; return sp; }
 
@@ -406,9 +406,50 @@
     });
   });
 
+  // frenzy fish: catching one multiplies the value of everything you catch for a short time.
+  // [name, money multiplier, spawn weight, seconds, rarity, look]
+  const FRENZY_TIERS = [
+    ['Lucky Frenzy Fish', 1.5, 1000, 45, 1, { col: [130, 80, 50] }],
+    ['Golden Frenzy Fish', 5, 150, 35, 2, { col: [46, 95, 55], shine: true }],
+    ['Ruby Frenzy Fish', 10, 45, 30, 3, { col: [350, 85, 50], shine: true }],
+    ['Diamond Frenzy Fish', 50, 6, 25, 4, { col: [190, 90, 78], alpha: 0.85, shine: true }],
+    ['Cosmic Frenzy Fish', 100, 1.5, 20, 5, { galaxy: true, glow: '#8fd6ff' }],
+    ['Mega Frenzy Fish', 1000, 0.25, 20, FABLED, { rainbow: true, glow: '#ffe680' }]
+  ];
+  const FRENZY_CHANCE = 0.02;
+  FRENZY_TIERS.forEach(([name, mult, w, secs, rarity, look], tier) => {
+    const id = 'global:frenzy-' + slug(name);
+    const rnd = mulberry32(hashStr(id));
+    const art = makeArt(name, 'fish', look, rnd, rarity);
+    art.tail = 'fan'; art.dorsal = 'spiky'; art.h = 0.5; art.f.frenzy = mult; art.flair = 'zaps'; art.motion = 'dart'; art.ms = 1.4;
+    art.glow = art.glow || ['#9dff8a', '#ffe066', '#ff8ca0', '#bff6ff'][tier] || '#ffe680';
+    const sp = addSpecies({ id, name, base: name, arch: 'fish', cat: CATS.frenzy, loc: -1, rarity, kg: 1.2 + tier * 0.6, depth: 0, vf: 3, frenzy: { mult, secs, tier }, w, art,
+      blurb: 'FRENZY! Everything you catch for ' + secs + ' seconds is worth ' + mult + '× more money!' });
+    GLOBAL.frenzy.push(sp);
+  });
+
+  // Can this catch be put on a hook as bait? Small, ordinary, non-venomous critters only.
+  const BAIT_ARCHES = ['fish', 'squid', 'plankton', 'eel', 'crab', 'lobster'];
+  const NO_BAIT = ['puffer', 'lion', 'scorpion', 'electric', 'plasma', 'frog', 'blob', 'stone', 'toxic', 'coffin', 'crown', 'yeti'];
+  function fishBait(sp) {
+    if (!sp || sp.frenzy || sp.loc < 0 && sp.arch !== 'plankton') return null;
+    if (BAIT_ARCHES.indexOf(sp.arch) < 0) return null;
+    if (sp.rarity >= 4) return null;
+    const max = sp.arch === 'eel' ? 3 : 8;
+    if (sp.kg > max) return null;
+    if (kw(sp.name.toLowerCase(), NO_BAIT)) return null;
+    const tier = sp.loc >= 0 ? sp.loc : 0;
+    return {
+      luck: 1.1 + 0.08 * sp.rarity + 0.01 * tier,
+      deep: 2 + Math.min(4, Math.max(0, Math.log2(sp.kg * 10 + 1))),
+      casts: 5 + sp.rarity * 2
+    };
+  }
+
   // ---------- catch rolling ----------
   function speciesValue(sp, locTier) {
     if (sp.loc >= 0) return sp.value;
+    if (sp.frenzy) return tierValue(locTier) * sp.vf;
     const mult = sp.rarity === FABLED ? RARITIES[FABLED].mult : 1;
     return tierValue(locTier) * sp.vf * mult;
   }
@@ -427,12 +468,15 @@
   }
 
   // Returns {sp, kg} for a cast. depth is the actual hook depth in metres.
-  function rollCatch(locIdx, rodIdx, baitIdx, depth, rand) {
-    rand = rand || Math.random;
+  function rollCatch(locIdx, rodIdx, baitIdx, depth, rand, opts) {
+    rand = rand || Math.random; opts = opts || {};
+    const lm = opts.luck || 1, deep = opts.deep || 2;
     const loc = LOCATIONS[locIdx], bait = BAITS[baitIdx];
     let sp;
     if (rand() < fabledChance(rodIdx, baitIdx, locIdx)) {
       sp = pickWeighted(GLOBAL.fabled, s => s.w, rand);
+    } else if (rand() < FRENZY_CHANCE) {
+      sp = pickWeighted(GLOBAL.frenzy, s => s.w * Math.pow(bait.luck * lm, s.frenzy.tier), rand);
     } else if (rand() < junkChance(baitIdx)) {
       sp = pickWeighted(GLOBAL.junk, s => RARITIES[s.rarity].w, rand);
     } else if (rand() < 0.05) {
@@ -440,13 +484,13 @@
     } else {
       const frac = depth / loc.maxDepth;
       const pool = POOLS[locIdx].filter(s => s.depth <= frac + 1e-9);
-      const luck = bait.luck * (1 + 0.012 * locIdx);
+      const luck = bait.luck * lm * (1 + 0.012 * locIdx);
       const ws = rarityWeights(luck);
       let rar = pickWeighted([0, 1, 2, 3, 4, 5], i => ws[i], rand);
       let cand = [];
       for (; rar >= 0; rar--) { cand = pool.filter(s => s.rarity === rar); if (cand.length) break; }
       // deeper species are a little more likely to bite when your hook is down there
-      sp = pickWeighted(cand, s => 1 + 2 * s.depth, rand);
+      sp = pickWeighted(cand, s => 1 + deep * s.depth, rand);
     }
     let g = 0; for (let i = 0; i < 4; i++) g += rand(); g = (g - 2) / 0.58; // ~N(0,1)
     const kg = Math.max(0.001, sp.kg * Math.exp(g * 0.28));
@@ -459,7 +503,7 @@
 
   G.FT = {
     RARITIES, FABLED, CATS, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, MOTIONS, FLAIRS,
-    hashStr, mulberry32, tierValue, speciesValue, fabledChance, junkChance, rarityWeights, rollCatch, catchValue
+    hashStr, mulberry32, tierValue, speciesValue, fabledChance, junkChance, rarityWeights, rollCatch, catchValue, fishBait, FRENZY_CHANCE
   };
   if (typeof module !== 'undefined') module.exports = G.FT;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,7 +1,7 @@
 /* Fishing Tycoon — game loop, fishing mechanics, UI. */
 (function () {
   'use strict';
-  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance } = window.FT;
+  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance, fishBait } = window.FT;
   const Art = window.Art;
   const $ = (s) => document.querySelector(s);
   const cv = $('#game'), ctx = cv.getContext('2d');
@@ -22,7 +22,7 @@
 
   // ---------------- save state ----------------
   const SAVE_KEY = 'fishing-tycoon-save-v1';
-  function fresh() { return { money: 0, rod: 0, bait: 0, loc: 0, rods: [0], baits: [0], locs: [0], bucket: [], dex: {}, stats: { casts: 0, catches: 0, earned: 0, fabled: 0, snaps: 0, best: null }, sound: true, quick: true, tut: true }; }
+  function fresh() { return { money: 0, rod: 0, bait: 0, loc: 0, rods: [0], baits: [0], locs: [0], bucket: [], dex: {}, stats: { casts: 0, catches: 0, earned: 0, fabled: 0, snaps: 0, best: null }, sound: true, quick: true, tut: true, fishBait: null, completions: 0, completeSeen: false }; }
   function load() {
     try { const raw = localStorage.getItem(SAVE_KEY); if (raw) { const s = Object.assign(fresh(), JSON.parse(raw)); s.bucket = s.bucket.filter((b) => BY_ID[b.id]); return s; } } catch (e) { /* no storage */ }
     return fresh();
@@ -121,8 +121,30 @@
   }
   function rand(a, b) { return a + Math.random() * (b - a); }
 
+  let frenzy = null;
+  function overlayOpen() { return !$('#modal').classList.contains('hidden') || !$('#card').classList.contains('hidden'); }
+  function startFrenzy(sp) {
+    const fz = sp.frenzy;
+    if (frenzy && frenzy.mult > fz.mult) { frenzy.t += fz.secs * 0.5; frenzy.dur = Math.max(frenzy.dur, frenzy.t); toast('⚡ Frenzy extended!', 'gold'); return; }
+    if (frenzy && frenzy.mult === fz.mult) { frenzy.t += fz.secs; frenzy.dur = frenzy.t; }
+    else frenzy = { mult: fz.mult, t: fz.secs, dur: fz.secs, name: sp.name };
+    toast('⚡ ' + fz.mult + '× MONEY FRENZY for ' + Math.round(frenzy.t) + ' seconds! Catch fast!', 'gold', 4000);
+    Snd.fabled();
+  }
+  function updateFrenzy(dt) {
+    const el = $('#frenzy');
+    if (!frenzy) { if (!el.classList.contains('hidden')) el.classList.add('hidden'); return; }
+    if (!overlayOpen()) frenzy.t -= dt;
+    if (frenzy.t <= 0) { frenzy = null; el.classList.add('hidden'); toast('The frenzy is over.', ''); return; }
+    el.classList.remove('hidden');
+    el.dataset.tier = frenzy.mult >= 1000 ? 'mega' : frenzy.mult >= 50 ? 'big' : '';
+    $('#frenzyText').textContent = '⚡ ' + frenzy.mult + '× FRENZY · ' + Math.ceil(frenzy.t) + 's';
+    $('#frenzyBar').style.width = (frenzy.t / frenzy.dur * 100) + '%';
+  }
+
   function update(dt) {
     time += dt;
+    updateFrenzy(dt);
     const sy = surfY();
     // camera
     if (phase === 'sink' || phase === 'wait' || phase === 'bite' || phase === 'reel' || phase === 'retrieve' || phase === 'land') {
@@ -160,7 +182,10 @@
         if (Math.random() < dt * 6) bubble(P.x, P.hookY);
         if (P.hookY >= P.targetY) {
           phase = 'wait';
-          P.catch = rollCatch(S.loc, S.rod, S.bait, P.depth);
+          const fb = S.fishBait;
+          P.catch = rollCatch(S.loc, S.rod, S.bait, P.depth, null, fb ? { luck: fb.luck, deep: fb.deep } : null);
+          if (fb && --fb.casts <= 0) { S.fishBait = null; toast('🐟 Your ' + esc(BY_ID[fb.id].name) + ' bait got eaten up!', ''); }
+          updateHUD(); save();
           P.wait = rand(1.4, 4.5) * BAITS[S.bait].bite;
           P.wt = 0;
           const sz = sizeFor(P.catch.sp);
@@ -245,7 +270,8 @@
 
   function landed() {
     const { sp, kg } = P.catch;
-    const v = catchValue(sp, kg, L.tier);
+    const fm = frenzy && !sp.frenzy ? frenzy.mult : 1;
+    const v = catchValue(sp, kg, L.tier) * fm;
     const isNew = !S.dex[sp.id];
     const d = S.dex[sp.id] || (S.dex[sp.id] = { n: 0, kg: 0 });
     d.n++; if (kg > d.kg) d.kg = +kg.toFixed(4);
@@ -253,10 +279,12 @@
     if (sp.rarity === FABLED) S.stats.fabled++;
     if (!S.stats.best || v > S.stats.best.v) S.stats.best = { id: sp.id, v, kg };
     const item = { id: sp.id, kg: +kg.toFixed(4), v };
+    if (fm > 1) item.fz = fm;
     resetPhase();
+    if (sp.frenzy) startFrenzy(sp);
     if (S.quick && !isNew && sp.rarity < 2) {
       S.bucket.push(item);
-      toast('+ ' + esc(sp.name) + ' ' + rtag(sp.rarity) + ' ' + kgs(kg) + ' · ' + money(v), 'good');
+      toast('+ ' + esc(sp.name) + ' ' + rtag(sp.rarity) + ' ' + kgs(kg) + ' · ' + money(v) + (fm > 1 ? ' <b>(⚡' + fm + '×)</b>' : ''), fm > 1 ? 'gold' : 'good');
     } else {
       showCard(item, isNew);
     }
@@ -329,10 +357,10 @@
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.quadraticCurveTo((tip.x + P.x) / 2, sy - 10, P.x, sy); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(P.x, sy); ctx.lineTo(P.x + Math.sin(time * 2) * 3, hy); ctx.stroke();
       Art.bobber(ctx, P.x, sy, K, time, phase === 'bite' || phase === 'reel');
-      if (phase !== 'land' && phase !== 'reel') Art.hook(ctx, P.x, hy, K, BAITS[S.bait]);
+      if (phase !== 'land' && phase !== 'reel') drawHook(P.x, hy);
     } else if (phase === 'idle' || phase === 'charge') {
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(tip.x + 2, tip.y + 40 * K); ctx.stroke();
-      Art.hook(ctx, tip.x + 2, tip.y + 46 * K, K, BAITS[S.bait]);
+      drawHook(tip.x + 2, tip.y + 46 * K);
     }
     ctx.restore();
 
@@ -357,6 +385,12 @@
     if (phase === 'charge') drawPower(fx, sy);
     if (phase === 'bite') drawBang(P.x, sy);
     if (phase === 'reel') drawReel();
+  }
+
+  function drawHook(x, y) {
+    if (!S.fishBait) { Art.hook(ctx, x, y, K, BAITS[S.bait]); return; }
+    Art.hook(ctx, x, y, K, null);
+    ctx.save(); ctx.translate(x - 4 * K, y + 10 * K); ctx.rotate(Math.PI / 2 + Math.sin(time * 4) * 0.2); Art.creature(ctx, BY_ID[S.fishBait.id], 22 * K, time, { noFx: true }); ctx.restore();
   }
 
   function drawGauge(sy) {
@@ -469,7 +503,7 @@
   function updateHUD() {
     $('#money').textContent = money(S.money).slice(1);
     $('#locName').textContent = L.name;
-    $('#gearLine').textContent = RODS[S.rod].name + ' · ' + BAITS[S.bait].name;
+    $('#gearLine').textContent = RODS[S.rod].name + ' · ' + (S.fishBait ? '🐟 ' + BY_ID[S.fishBait.id].name + ' bait (' + S.fishBait.casts + ' casts)' : BAITS[S.bait].name);
     $('#bucketCount').textContent = S.bucket.length;
   }
   function toast(html, cls, ms) {
@@ -538,6 +572,7 @@
     else if (modalKind === 'map') { $('#modalTitle').textContent = 'Travel'; tabs(null); renderMap(body); }
     else if (modalKind === 'bucket') { $('#modalTitle').textContent = 'Your Bucket'; tabs(null); renderBucket(body); }
     else if (modalKind === 'dex') { $('#modalTitle').textContent = 'Fishdex'; tabs(null); renderDex(body); }
+    else if (modalKind === 'complete') { $('#modalTitle').textContent = 'Champion Angler!'; tabs(null); renderComplete(body); }
     else if (modalKind === 'settings') { $('#modalTitle').textContent = 'Settings & Stats'; tabs(null); renderSettings(body); }
   }
   function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
@@ -563,7 +598,7 @@
         if (!own) { if (S.money < g.price) return; S.money -= g.price; owned.push(g.id); Snd.cash(); toast('Bought ' + esc(g.name) + '!', 'good'); }
         else Snd.click();
         if (isRod) S.rod = g.id; else S.bait = g.id;
-        save(); updateHUD(); renderModal();
+        save(); updateHUD(); if (!checkComplete()) renderModal();
       };
       t.appendChild(b); card.appendChild(t); grid.appendChild(card);
     });
@@ -585,6 +620,7 @@
         if (!own) { if (S.money < l.price) return; S.money -= l.price; S.locs.push(l.tier); Snd.cash(); toast('Unlocked ' + esc(l.name) + '!', 'gold'); }
         S.loc = l.tier; setupLoc(); save(); updateHUD(); closeModal();
         toast('🧭 Welcome to ' + esc(l.name) + '!', 'good');
+        checkComplete();
       };
       t.appendChild(b); card.appendChild(t); grid.appendChild(card);
     });
@@ -605,6 +641,8 @@
     const b2 = el('button', 'btn small orange', 'Sell below Epic'); b2.onclick = () => { sellItems((it) => BY_ID[it.id].rarity < 3); renderModal(); };
     const b3 = el('button', 'btn small blue', 'Sell Junk'); b3.onclick = () => { sellItems((it) => BY_ID[it.id].arch === 'junk'); renderModal(); };
     bar.appendChild(b1); bar.appendChild(b2); bar.appendChild(b3); body.appendChild(bar);
+    const fbInfo = S.fishBait ? '🐟 On your hook: <b>' + esc(BY_ID[S.fishBait.id].name) + '</b> — ' + S.fishBait.casts + ' casts left. ' : '';
+    body.appendChild(el('p', 'info', fbInfo + 'Tap <b>🪝 Bait</b> to put a small fish on your hook. Live bait boosts your luck and attracts bigger catches for a few casts. Big, rare, spiky or venomous creatures can\'t be used as bait.'));
     if (!S.bucket.length) { body.appendChild(el('p', 'info', 'Your bucket is empty. Go catch something!')); return; }
     const rows = el('div', 'rows'); body.appendChild(rows);
     const sorted = S.bucket.map((it, i) => [it, i]).sort((a, b) => b[0].v - a[0].v);
@@ -612,8 +650,20 @@
       const sp = BY_ID[it.id];
       const r = el('div', 'row');
       r.appendChild(iconCanvas(sp, 52, 40));
-      r.appendChild(el('div', 'nm', esc(sp.name) + ' ' + rtag(sp.rarity) + '<small>' + sp.cat + ' · ' + kgs(it.kg) + '</small>'));
+      r.appendChild(el('div', 'nm', esc(sp.name) + ' ' + rtag(sp.rarity) + '<small>' + sp.cat + ' · ' + kgs(it.kg) + (it.fz ? ' · ⚡' + it.fz + '× frenzy' : '') + '</small>'));
       r.appendChild(el('div', 'val', money(it.v)));
+      const fb = fishBait(sp);
+      if (fb) {
+        const bb = el('button', 'btn small orange', '🪝 Bait');
+        bb.title = '+' + Math.round((fb.luck - 1) * 100) + '% luck for ' + fb.casts + ' casts';
+        bb.onclick = () => {
+          S.bucket.splice(S.bucket.indexOf(it), 1);
+          S.fishBait = { id: sp.id, casts: fb.casts, luck: fb.luck, deep: fb.deep };
+          Snd.click(); toast('🪝 ' + esc(sp.name) + ' is on your hook! +' + Math.round((fb.luck - 1) * 100) + '% luck & bigger bites for ' + fb.casts + ' casts.', 'good', 3500);
+          save(); updateHUD(); renderModal();
+        };
+        r.appendChild(bb);
+      }
       const b = el('button', 'btn small green', 'Sell'); b.onclick = () => { sellItems((x) => x === it); renderModal(); };
       r.appendChild(b); rows.appendChild(r);
     });
@@ -621,7 +671,7 @@
   }
 
   // Fishdex
-  const DEX_GROUPS = LOCATIONS.map((l) => ({ name: l.name, list: POOLS[l.tier] })).concat([{ name: '✨ Fabled Legends', list: GLOBAL.fabled }, { name: '🥾 Junk & Plankton (anywhere)', list: GLOBAL.junk.concat(GLOBAL.plankton) }]);
+  const DEX_GROUPS = LOCATIONS.map((l) => ({ name: l.name, list: POOLS[l.tier] })).concat([{ name: '✨ Fabled Legends', list: GLOBAL.fabled }, { name: '⚡ Frenzy Fish', list: GLOBAL.frenzy }, { name: '🥾 Junk & Plankton (anywhere)', list: GLOBAL.junk.concat(GLOBAL.plankton) }]);
   let dexGroup = 0, dexCat = 'all', dexRar = 'all', dexPage = 0;
   function renderDex(body) {
     const found = Object.keys(S.dex).length;
@@ -660,19 +710,46 @@
     }
   }
 
+  function isComplete() { return S.rods.length >= RODS.length && S.baits.length >= BAITS.length && S.locs.length >= LOCATIONS.length; }
+  function checkComplete() {
+    if (!isComplete() || S.completeSeen) return false;
+    S.completeSeen = true; save(); confetti(220); Snd.fabled();
+    modalKind = 'complete'; modalTab = null; modal.classList.remove('hidden'); renderModal();
+    return true;
+  }
+  function resetGame(keepTrophy) {
+    const done = (S.completions || 0) + (keepTrophy ? 1 : 0), snd = S.sound, quick = S.quick;
+    S = fresh(); S.completions = done; S.sound = snd; S.quick = quick; S.tut = false;
+    frenzy = null; save(); setupLoc(); updateHUD(); closeModal();
+    toast(keepTrophy ? '🏆 New game started! Trophies: ' + done : 'Fresh start! Back to the Raggity Old Stick.', 'gold', 4000);
+  }
+  function renderComplete(body) {
+    body.appendChild(el('div', 'info', '<div style="font-size:64px;text-align:center">🏆</div><h3 style="text-align:center;font-family:Lilita One;font-size:28px;margin:4px 0">You beat Fishing Tycoon!</h3><p style="text-align:center">You own every rod, every bait and every fishing spot in the world. You\'ve found ' + Object.keys(S.dex).length.toLocaleString() + ' of ' + SPECIES.length.toLocaleString() + ' species.</p>'));
+    const box = el('div', 'toolbar'); box.style.justifyContent = 'center';
+    const r = el('button', 'btn green', '🔄 Reset & play again'); r.onclick = () => { if (confirm('Start a brand new game? You keep your 🏆 trophy, everything else resets.')) resetGame(true); };
+    const k = el('button', 'btn blue', 'Keep fishing'); k.onclick = closeModal;
+    box.appendChild(r); box.appendChild(k); body.appendChild(box);
+    body.appendChild(el('p', 'info', '<br>You can also reset any time from ⚙️ Settings.'));
+  }
+
   function renderSettings(body) {
     const st = S.stats;
     const best = st.best && BY_ID[st.best.id];
     const s = el('div', 'stats');
-    [['Casts', st.casts.toLocaleString()], ['Catches', st.catches.toLocaleString()], ['Money earned', money(st.earned)], ['Species found', Object.keys(S.dex).length.toLocaleString()], ['Fabled caught', st.fabled], ['Lines snapped', st.snaps], ['Best catch', best ? esc(best.name) + ' (' + money(st.best.v) + ')' : '—']]
+    [['Casts', st.casts.toLocaleString()], ['Catches', st.catches.toLocaleString()], ['Money earned', money(st.earned)], ['Species found', Object.keys(S.dex).length.toLocaleString()], ['Fabled caught', st.fabled], ['Lines snapped', st.snaps], ['🏆 Games completed', S.completions || 0], ['Best catch', best ? esc(best.name) + ' (' + money(st.best.v) + ')' : '—']]
       .forEach(([k, v]) => s.appendChild(el('div', 'stat', k + '<b>' + v + '</b>')));
     body.appendChild(s);
     const box = el('div', 'settings'); box.style.marginTop = '14px'; body.appendChild(box);
     const mk = (label, key) => { const l = el('label'); const c = el('input'); c.type = 'checkbox'; c.checked = !!S[key]; c.onchange = () => { S[key] = c.checked; save(); }; l.appendChild(c); l.appendChild(document.createTextNode(label)); box.appendChild(l); };
     mk('🔊 Sound effects', 'sound');
     mk('⚡ Quick mode — skip the big catch card for Common & Uncommon creatures you already know', 'quick');
+    if (isComplete()) {
+      const g = el('button', 'btn green', '🏆 You beat the game — Reset & play again');
+      g.onclick = () => { if (confirm('Start a brand new game? You keep your 🏆 trophy, everything else resets.')) resetGame(true); };
+      box.appendChild(g);
+    }
     const r = el('button', 'btn red', '🗑️ Reset all progress');
-    r.onclick = () => { if (confirm('Erase ALL progress and start over with the raggity old stick?')) { S = fresh(); save(); setupLoc(); updateHUD(); closeModal(); $('#hint').classList.remove('hidden'); } };
+    r.onclick = () => { if (confirm('Erase ALL progress and start over with the raggity old stick?')) resetGame(false); };
     box.appendChild(r);
     body.appendChild(el('p', 'info', '<br>Fishing Tycoon · ' + SPECIES.length.toLocaleString() + ' species across ' + LOCATIONS.length + ' locations, ' + RODS.length + ' rods and ' + BAITS.length + ' baits.'));
   }
@@ -687,7 +764,7 @@
     $('#cardBadge').classList.toggle('hidden', !isNew);
     const rr = $('#cardRarity'); rr.textContent = sp.rarity === FABLED ? '✨ FABLED ✨' : R.name; rr.style.background = sp.rarity === FABLED ? 'linear-gradient(90deg,#ff4d5e,#ffd23f,#3fbf4f,#2f8cf0,#a43be0)' : R.color;
     const nm = $('#cardName'); nm.textContent = sp.name; nm.className = sp.rarity === FABLED ? 'rainbowtext' : '';
-    $('#cardMeta').innerHTML = '<span>⚖️ ' + kgs(item.kg) + '</span><span>💰 ' + money(item.v) + '</span><span>🏷️ ' + sp.cat + '</span>';
+    $('#cardMeta').innerHTML = '<span>⚖️ ' + kgs(item.kg) + '</span><span>💰 ' + money(item.v) + (item.fz ? ' (⚡' + item.fz + '×)' : '') + '</span><span>🏷️ ' + sp.cat + '</span>';
     $('#cardBlurb').textContent = sp.blurb || (isNew ? 'A brand-new discovery for your Fishdex!' : 'Caught ' + S.dex[sp.id].n + ' times so far.');
     $('#cardSell').textContent = 'Sell ' + money(item.v);
     if (sp.rarity === FABLED) { Snd.fabled(); toast('🌟 FABLED CATCH! You caught ' + esc(sp.name) + '!', 'gold', 5000); }

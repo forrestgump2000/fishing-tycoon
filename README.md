@@ -20,6 +20,9 @@ A cartoony fishing tycoon game that runs in the browser. You start at a muddy po
 - **Creatures**: fish, eels, sharks, whales, dolphins, octopi, squid, crabs, lobsters, starfish, seahorses, sea sponges, sea snails, sea urchins, sea lions, sea spiders, plankton, coral, manatees, barnacles, and junk like old boots
 - **Fabled legends** (about a 0.01% chance with starter gear): Megalodon, Mermaid, Kraken, Poseidon, Bubble Buddy, Plesiosaurus, Santa Claus, UFO, Alien, Aquaman, Loch Ness Monster, Mosasaurus, Dunkleosteus and more
 - **7 rarities**: Common, Uncommon, Rare, Epic, Legendary, Mythic and Fabled
+- **Frenzy Fish** (about 2% of bites, anywhere): catching one makes everything you catch for a short time worth more money. Lucky ×1.5 is common, then Golden ×5, Ruby ×10, Diamond ×50, Cosmic ×100, and the extremely rare Mega Frenzy Fish at ×1000. Better bait makes the big ones less rare.
+- **Live bait**: put a small fish from your Bucket on the hook for extra luck and bigger bites for a few casts. Big, rare, spiky or venomous creatures can't be used as bait.
+- **Beat the game**: own every rod, bait and location to become Champion Angler, then reset and play again (you keep your 🏆 trophy count)
 - A **Fishdex** that tracks every species you've discovered
 - Progress saves automatically in your browser
 
