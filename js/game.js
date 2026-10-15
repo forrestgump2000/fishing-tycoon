@@ -105,7 +105,7 @@
   // ---------------- phases ----------------
   const cam = { y: 0, target: 0 };
   let phase = 'idle', P = {}, time = 0, holding = false;
-  function resetPhase() { phase = 'idle'; P = {}; holding = false; }
+  function resetPhase() { phase = 'idle'; P = {}; holding = false; if (typeof pressed !== 'undefined') pressed.clear(); }
   function fisherX() { return Math.max(110 * K, Math.min(W * 0.2, 260)); }
   function maxCast() { return Math.min(RODS[S.rod].depth, L.maxDepth); }
   function surfY() { return -cam.y; }
@@ -615,29 +615,49 @@
   }
 
   // ---------------- input ----------------
+  // Every finger / mouse button / Space press currently held. "holding" is true while any is down, so a
+  // lost or cancelled event on one finger can never leave the reel stuck on.
+  var pressed = new Set();
+  function setHolding() { holding = pressed.size > 0; }
   function down(e) {
     Snd.unlock();
     if (e && e.target !== cv) return;
-    holding = true;
+    pressed.add(e ? 'p' + e.pointerId : 'key');
+    setHolding();
     if (phase === 'idle') startCharge();
     else if (phase === 'bite') hookIt();
     else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += 0.08; else P.mg.p += 0.025; }
   }
-  function up() {
-    holding = false;
-    if (phase === 'charge') releaseCast();
+  function release(id) {
+    if (id == null) pressed.clear(); else pressed.delete(id);
+    setHolding();
+    if (!holding && phase === 'charge') releaseCast();
   }
-  cv.addEventListener('pointerdown', (e) => { e.preventDefault(); down(e); });
+  function up() { release(null); }
+  cv.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
+    down(e);
+  });
+  const ptrUp = (e) => release('p' + e.pointerId);
+  for (const t of [cv, window]) { t.addEventListener('pointerup', ptrUp); t.addEventListener('pointercancel', ptrUp); }
+  cv.addEventListener('lostpointercapture', ptrUp);
+  // touch fallbacks: when the last finger leaves the screen, nothing is held
+  const touchEnd = (e) => { if (!e.touches || e.touches.length === 0) { for (const id of Array.from(pressed)) if (id !== 'key') pressed.delete(id); setHolding(); if (!holding && phase === 'charge') releaseCast(); } };
+  document.addEventListener('touchend', touchEnd, { passive: true });
+  document.addEventListener('touchcancel', touchEnd, { passive: true });
+  cv.addEventListener('contextmenu', (e) => e.preventDefault());
+  window.addEventListener('blur', up);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) up(); });
   $('#netBtn').addEventListener('click', throwNet);
-  window.addEventListener('pointerup', up);
-  window.addEventListener('pointercancel', up);
   window.addEventListener('keydown', (e) => {
     if (e.code !== 'Space' || e.repeat) return;
     if (!$('#modal').classList.contains('hidden') || !$('#card').classList.contains('hidden')) return;
-    e.preventDefault(); Snd.unlock(); holding = true;
+    e.preventDefault(); Snd.unlock(); pressed.add('key'); setHolding();
     if (phase === 'idle') startCharge(); else if (phase === 'bite') hookIt();
+    else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += 0.08; else P.mg.p += 0.025; }
   });
-  window.addEventListener('keyup', (e) => { if (e.code === 'Space') up(); });
+  window.addEventListener('keyup', (e) => { if (e.code === 'Space') release('key'); });
 
   // ---------------- HUD ----------------
   function updateHUD() {
@@ -693,7 +713,7 @@
   const modal = $('#modal');
   function openModal(kind, tab) {
     if (phase !== 'idle' && phase !== 'charge') { toast('Finish your cast first!', 'bad'); return; }
-    holding = false; if (phase === 'charge') resetPhase();
+    pressed.clear(); holding = false; if (phase === 'charge') resetPhase();
     modalKind = kind; modalTab = tab || null; modal.classList.remove('hidden'); Snd.click(); renderModal();
   }
   function closeModal() { if (modalKind === 'haul' && pendingHaul) settleHaul(false); modal.classList.add('hidden'); modalKind = null; }
@@ -974,6 +994,6 @@
   updateHUD();
   if (!S.tut) $('#hint').classList.add('hidden');
   document.addEventListener('visibilitychange', () => { if (document.hidden) save(); });
-  window.FTGame = { get state() { return S; }, get phase() { return phase; }, get P() { return P; }, setupLoc, updateHUD };
+  window.FTGame = { get state() { return S; }, get phase() { return phase; }, get P() { return P; }, get holding() { return holding; }, setupLoc, updateHUD };
   requestAnimationFrame(frame);
 })();
