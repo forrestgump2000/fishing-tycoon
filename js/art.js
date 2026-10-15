@@ -668,7 +668,8 @@
       ctx.save(); ctx.rotate(-0.5);
       const p = new Path2D(); p.moveTo(-R * 0.3, R * 0.9); p.lineTo(-R * 0.3, -R * 0.2); p.quadraticCurveTo(-R * 0.3, -R * 0.45, -R * 0.12, -R * 0.55); p.lineTo(-R * 0.12, -R * 0.9); p.lineTo(R * 0.12, -R * 0.9); p.lineTo(R * 0.12, -R * 0.55); p.quadraticCurveTo(R * 0.3, -R * 0.45, R * 0.3, -R * 0.2); p.lineTo(R * 0.3, R * 0.9); p.closePath();
       ctx.save(); ctx.globalAlpha *= 0.75; body(p, -R * 0.3, -R * 0.9, R * 0.6, R * 1.8); ctx.restore();
-      ctx.beginPath(); ctx.rect(-R * 0.16, -R * 0.1, R * 0.32, R * 0.7); fs(ctx, '#f3e3b5');
+      ctx.beginPath(); ctx.rect(-R * 0.16, -R * 0.1, R * 0.32, R * 0.7); fs(ctx, a.f.letter ? '#d9b26a' : '#f3e3b5');
+      if (a.f.letter) { ctx.save(); ctx.lineWidth *= 0.5; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(-R * 0.1, R * (0.02 + i * 0.13)); ctx.lineTo(R * 0.1, R * (0.02 + i * 0.13)); ctx.stroke(); } ctx.restore(); circ(ctx, 0, R * 0.48, R * 0.11); fs(ctx, '#c0282f'); }
       ctx.beginPath(); ctx.rect(-R * 0.13, -R * 1.05, R * 0.26, R * 0.18); fs(ctx, '#9a6a3a');
       ctx.restore();
     }

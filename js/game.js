@@ -1,7 +1,7 @@
 /* Fishing Tycoon — game loop, fishing mechanics, UI. */
 (function () {
   'use strict';
-  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance, fishBait, NETS, NET_COOLDOWN } = window.FT;
+  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance, fishBait, NETS, NET_COOLDOWN, LETTERS } = window.FT;
   const Art = window.Art;
   const $ = (s) => document.querySelector(s);
   const cv = $('#game'), ctx = cv.getContext('2d');
@@ -353,21 +353,23 @@
     const diff = Math.min(1, 0.18 + Math.min(r, 5) * 0.1 + (r === FABLED ? 0.45 : 0) + (heavy ? 0.22 : 0));
     phase = 'reel';
     // tug of war: p is how far the green bar has been dragged down the line toward you (0 = at the fish, 1 = landed)
-    P.mg = { p: 0.3, pull: (0.36 + rod.reel * 0.55) * (heavy ? 0.75 : 1), base: 0.06 + diff * 0.14, surgeP: 0.3 + diff * 0.4, ten: 0, surge: 0, next: rand(0.6, 1.4), vib: 0, diff, heavy, startY: P.hookY };
+    P.mg = { p: 0.3, pull: (0.36 + rod.reel * 0.55) * (heavy ? 0.75 : 1), base: 0.06 + diff * 0.14, surgeP: 0.3 + diff * 0.4, ten: 0, surge: 0, warn: 0, next: rand(0.6, 1.4), vib: 0, diff, heavy, startY: P.hookY };
     if (heavy) toast('⚠️ Heavy catch! Your line is straining...', 'bad');
   }
 
   function reelUpdate(dt) {
     const m = P.mg;
     // the fish fights in surges: it thrashes (vibrates) and yanks the line back toward itself
+    // each surge is telegraphed by a short wind-up shake so there's time to let go (longer on touch screens)
     if (m.surge > 0) { m.surge -= dt; if (m.surge <= 0) m.next = rand(0.7, 2.0) * (1.25 - m.diff * 0.5); }
-    else { m.next -= dt; if (m.next <= 0) { m.surge = rand(0.4, 0.8) + m.diff * 0.3; Snd.bite(); } }
+    else if (m.warn > 0) { m.warn -= dt; if (m.warn <= 0) m.surge = rand(0.4, 0.8) + m.diff * 0.3; }
+    else { m.next -= dt; if (m.next <= 0) { m.warn = touchInput ? 0.5 : 0.3; Snd.bite(); } }
     const surging = m.surge > 0;
-    m.vib += ((surging ? 1 : 0.15 + m.diff * 0.2) - m.vib) * Math.min(1, dt * 10);
+    m.vib += ((surging ? 1 : m.warn > 0 ? 0.55 : 0.15 + m.diff * 0.2) - m.vib) * Math.min(1, dt * 10);
     const w = 0.85 + 0.3 * Math.abs(Math.sin(time * 23));
     // reeling against a thrashing fish builds line tension; let go while it fights, reel while it rests
-    if (holding) { m.p += (m.pull - (surging ? m.surgeP : m.base) * w) * dt; m.ten += (surging ? 1.5 : -0.5) * dt; }
-    else { m.p -= (surging ? m.surgeP * 0.5 : m.base) * w * dt; m.ten -= dt; }
+    if (holding) { m.p += (m.pull - (surging ? m.surgeP : m.base) * w) * dt; m.ten += (surging ? (touchInput ? 0.95 : 1.5) : -0.6) * dt; }
+    else { m.p -= (surging ? m.surgeP * 0.5 : m.base) * w * dt; m.ten -= 1.4 * dt; }
     m.ten = Math.max(0, m.ten);
     if (holding && Math.random() < dt * 16) Snd.tick();
     if (m.ten >= 1) { S.stats.snaps++; Snd.snap(); fail('💥 SNAP! Too much tension — let go of the reel while the fish thrashes!'); return; }
@@ -569,7 +571,7 @@
     ctx.fillStyle = 'rgba(255,248,231,0.95)'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(px, py, pw, ph, 18) : ctx.rect(px, py, pw, ph); ctx.fill(); ctx.stroke();
     // title
     ctx.font = "900 " + (W < 600 ? 17 : 20) + "px 'Lilita One', sans-serif"; ctx.textAlign = 'center'; ctx.lineWidth = 5; ctx.lineJoin = 'round';
-    const msg = surging ? (holding ? '⚠️ LET GO! IT\'S THRASHING!' : '🐟 IT\'S PULLING… WAIT!') : holding ? 'REELING IN!' : 'HOLD TO REEL!';
+    const msg = surging ? (holding ? '⚠️ LET GO! IT\'S THRASHING!' : '🐟 IT\'S PULLING… WAIT!') : m.warn > 0 ? '⚠️ GET READY TO LET GO…' : holding ? 'REELING IN!' : 'HOLD TO REEL!';
     ctx.strokeStyle = '#1d2235'; ctx.fillStyle = surging ? '#ff4d5e' : '#fff'; ctx.strokeText(msg, W / 2, py + 22); ctx.fillText(msg, W / 2, py + 22);
     // track: wavy line that thrashes while the fish fights
     const fx = x1 + 40 + (Math.random() - 0.5) * 10 * m.vib, fy = ly + (Math.random() - 0.5) * 10 * m.vib;
@@ -621,6 +623,7 @@
   // Every finger / mouse button / Space press currently held. "holding" is true while any is down, so a
   // lost or cancelled event on one finger can never leave the reel stuck on.
   var pressed = new Set();
+  let touchInput = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
   function setHolding() { holding = pressed.size > 0; }
   function down(e) {
     Snd.unlock();
@@ -629,7 +632,7 @@
     setHolding();
     if (phase === 'idle') startCharge();
     else if (phase === 'bite') hookIt();
-    else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += 0.08; else P.mg.p += 0.025; }
+    else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += touchInput ? 0.025 : 0.06; else P.mg.p += 0.025; }
   }
   function release(id) {
     if (id == null) pressed.clear(); else pressed.delete(id);
@@ -639,6 +642,7 @@
   function up() { release(null); }
   cv.addEventListener('pointerdown', (e) => {
     e.preventDefault();
+    touchInput = e.pointerType === 'touch' || e.pointerType === 'pen';
     try { cv.setPointerCapture(e.pointerId); } catch (err) { /* not supported */ }
     down(e);
   });
@@ -658,7 +662,7 @@
     if (!$('#modal').classList.contains('hidden') || !$('#card').classList.contains('hidden')) return;
     e.preventDefault(); Snd.unlock(); pressed.add('key'); setHolding();
     if (phase === 'idle') startCharge(); else if (phase === 'bite') hookIt();
-    else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += 0.08; else P.mg.p += 0.025; }
+    else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += touchInput ? 0.025 : 0.06; else P.mg.p += 0.025; }
   });
   window.addEventListener('keyup', (e) => { if (e.code === 'Space') release('key'); });
 
@@ -865,7 +869,7 @@
   }
 
   // Fishdex
-  const DEX_GROUPS = LOCATIONS.map((l) => ({ name: l.name, list: POOLS[l.tier] })).concat([{ name: '✨ Fabled Legends', list: GLOBAL.fabled }, { name: '⚡ Frenzy Fish', list: GLOBAL.frenzy }, { name: '🥾 Junk & Plankton (anywhere)', list: GLOBAL.junk.concat(GLOBAL.plankton) }]);
+  const DEX_GROUPS = LOCATIONS.map((l) => ({ name: l.name, list: POOLS[l.tier] })).concat([{ name: '✨ Fabled Legends', list: GLOBAL.fabled }, { name: '⚡ Frenzy Fish', list: GLOBAL.frenzy }, { name: '🥾 Junk & Plankton (anywhere)', list: GLOBAL.junk.concat(GLOBAL.special, GLOBAL.plankton) }]);
   let dexGroup = 0, dexCat = 'all', dexRar = 'all', dexPage = 0;
   function renderDex(body) {
     const found = Object.keys(S.dex).length;
@@ -959,7 +963,7 @@
     const rr = $('#cardRarity'); rr.textContent = sp.rarity === FABLED ? '✨ FABLED ✨' : R.name; rr.style.background = sp.rarity === FABLED ? 'linear-gradient(90deg,#ff4d5e,#ffd23f,#3fbf4f,#2f8cf0,#a43be0)' : R.color;
     const nm = $('#cardName'); nm.textContent = sp.name; nm.className = sp.rarity === FABLED ? 'rainbowtext' : '';
     $('#cardMeta').innerHTML = '<span>⚖️ ' + kgs(item.kg) + '</span><span>💰 ' + money(item.v) + (item.fz ? ' (⚡' + item.fz + '×)' : '') + '</span><span>🏷️ ' + sp.cat + '</span>';
-    $('#cardBlurb').textContent = sp.blurb || (isNew ? 'A brand-new discovery for your Fishdex!' : 'Caught ' + S.dex[sp.id].n + ' times so far.');
+    $('#cardBlurb').textContent = (sp.fixedValue ? '📜 ' + LETTERS[Math.floor(Math.random() * LETTERS.length)] + ' 💰 A collector will pay $5,000 for it!' : '') || sp.blurb || (isNew ? 'A brand-new discovery for your Fishdex!' : 'Caught ' + S.dex[sp.id].n + ' times so far.');
     $('#cardSell').textContent = 'Sell ' + money(item.v);
     if (sp.rarity === FABLED) { Snd.fabled(); toast('🌟 FABLED CATCH! You caught ' + esc(sp.name) + '!', 'gold', 5000); }
   }

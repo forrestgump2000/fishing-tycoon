@@ -325,7 +325,7 @@
   const SPECIES = [];
   const BY_ID = {};
   const POOLS = LOCATIONS.map(() => []);   // per-location catchable (non-global) species
-  const GLOBAL = { plankton: [], junk: [], fabled: [], frenzy: [] };
+  const GLOBAL = { plankton: [], junk: [], fabled: [], frenzy: [], special: [] };
 
   function addSpecies(sp) { SPECIES.push(sp); BY_ID[sp.id] = sp; return sp; }
 
@@ -377,6 +377,25 @@
       GLOBAL.junk.push(sp);
     });
   });
+
+  // A very rare surprise: sometimes the message in a bottle is an ancient letter worth a fixed $5,000.
+  const LETTER = (() => {
+    const id = 'global:ancient-letter-in-a-bottle';
+    const art = makeArt('Message in a Bottle', 'junk', { col: [140, 30, 40] }, mulberry32(hashStr(id)), 4);
+    art.f.letter = true; art.glow = '#ffe680'; art.flair = 'glints';
+    const sp = addSpecies({ id, name: 'Ancient Letter in a Bottle', base: 'Ancient Letter in a Bottle', arch: 'junk', cat: CATS.junk, loc: -1, rarity: 4, kg: 0.5, depth: 0, vf: 0, fixedValue: 5000, art });
+    GLOBAL.special.push(sp);
+    return sp;
+  })();
+  const LETTER_CHANCE = 0.05; // of every message in a bottle you fish up
+  const LETTERS = [
+    '"Dearest Margaret, the voyage is long and the biscuits have weevils. I shall return by spring." — Captain J. Whitlock, 1743',
+    '"To whoever finds this: the treasure is buried beneath the third palm. Tell no one." — signed, a nervous pirate, 1698',
+    '"Day 412 on this island. The crabs have elected me their king. Send help, or more crabs." — 1821',
+    '"My dearest Eliza, I have discovered a fish that sings. The crew thinks I have gone mad." — 1789',
+    '"If this bottle reaches land, please return my left boot. I lost it overboard." — Ship\'s cook, 1856',
+    '"The sea monster was REAL. I saw it with my own two eyes. It waved at me." — 1702'
+  ];
 
   // fabled: fictional & extinct legends. [name, arch, kg, valueFactor, spawnWeight, blurb]
   const FABLED_BASES = [
@@ -460,6 +479,7 @@
   function speciesValue(sp, locTier) {
     if (sp.loc >= 0) return sp.value;
     if (sp.frenzy) return tierValue(locTier) * sp.vf;
+    if (sp.fixedValue) return sp.fixedValue;
     const mult = sp.rarity === FABLED ? RARITIES[FABLED].mult : 1;
     return tierValue(locTier) * sp.vf * mult;
   }
@@ -489,6 +509,7 @@
       sp = pickWeighted(GLOBAL.frenzy, s => s.w * Math.pow(bait.luck * lm, s.frenzy.tier), rand);
     } else if (rand() < junkChance(baitIdx)) {
       sp = pickWeighted(GLOBAL.junk, s => RARITIES[s.rarity].w, rand);
+      if (sp.base === 'Message in a Bottle' && rand() < LETTER_CHANCE) sp = LETTER;
     } else if (rand() < 0.05 * (1 - 0.8 * Math.min(1, depth / loc.maxDepth))) {
       sp = pickWeighted(GLOBAL.plankton, s => RARITIES[s.rarity].w * Math.pow(bait.luck * 1.03, s.rarity * 1.15), rand);
     } else {
@@ -510,12 +531,13 @@
   }
 
   function catchValue(sp, kg, locTier) {
+    if (sp.fixedValue) return sp.fixedValue;
     return speciesValue(sp, locTier) * Math.pow(kg / sp.kg, 0.6);
   }
 
   G.FT = {
     RARITIES, FABLED, CATS, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, MOTIONS, FLAIRS,
-    hashStr, mulberry32, tierValue, speciesValue, fabledChance, junkChance, rarityWeights, rollCatch, catchValue, fishBait, FRENZY_CHANCE, NETS, NET_COOLDOWN
+    hashStr, mulberry32, tierValue, speciesValue, fabledChance, junkChance, rarityWeights, rollCatch, catchValue, fishBait, FRENZY_CHANCE, NETS, NET_COOLDOWN, LETTERS
   };
   if (typeof module !== 'undefined') module.exports = G.FT;
 })(typeof window !== 'undefined' ? window : globalThis);

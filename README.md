@@ -8,7 +8,7 @@ A cartoony fishing tycoon game that runs in the browser. You start at a muddy po
 
 1. **Hold** anywhere (mouse, touch or Space) to charge your cast, then let go. More power means a deeper cast, up to your rod's reach. **Deeper is better.** Creatures live in depth bands, so the deeper your hook, the bigger, rarer and more valuable your catches. Casting to the bottom pays about 10× more than the shallows.
 2. When the **!** pops up, tap fast to set the hook.
-3. **Tug of war!** Hold to reel and drag the green bar all the way down the line to you. When the fish starts thrashing and vibrating it yanks the line back. Let go until it calms down, or the line tension maxes out and your line snaps. Tap fast to reel in quicker.
+3. **Tug of war!** Hold to reel and drag the green bar all the way down the line to you. When the fish starts thrashing and vibrating it yanks the line back. A quick "get ready" shake warns you before each surge. Let go until it calms down, or the line tension maxes out and your line snaps. Tap fast to reel in quicker.
 4. Sell your catches from the **Bucket** and spend the money in the **Shop** and on **Travel**.
 
 ## What's in it
@@ -22,6 +22,7 @@ A cartoony fishing tycoon game that runs in the browser. You start at a muddy po
 - **7 rarities**: Common, Uncommon, Rare, Epic, Legendary, Mythic and Fabled
 - **Frenzy Fish** (about 2% of bites, anywhere): catching one makes everything you catch for a short time worth more money. Lucky ×1.5 is common, then Golden ×5, Ruby ×10, Diamond ×50, Cosmic ×100, and the extremely rare Mega Frenzy Fish at ×1000. Better bait makes the big ones less rare.
 - **5 nets** ($900 to $2B) that haul up 3, 5, 10, 20 or 25 creatures in one throw, with a 45-second recharge. A Frenzy Fish caught in a net doesn't start a frenzy; it makes every creature in that haul worth 1.5×.
+- **Ancient letters**: very rarely (about 1 in 1,500 casts with starter gear), a Message in a Bottle turns out to be a centuries-old letter worth exactly $5,000
 - **Live bait**: put a small fish from your Bucket on the hook for extra luck and bigger bites for a few casts. Big, rare, spiky or venomous creatures can't be used as bait.
 - **Beat the game**: own every rod, bait, net and location to become Champion Angler, then reset and play again (you keep your 🏆 trophy count)
 - A **Fishdex** that tracks every species you've discovered
