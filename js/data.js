@@ -383,11 +383,26 @@
     const id = 'global:ancient-letter-in-a-bottle';
     const art = makeArt('Message in a Bottle', 'junk', { col: [140, 30, 40] }, mulberry32(hashStr(id)), 4);
     art.f.letter = true; art.glow = '#ffe680'; art.flair = 'glints';
-    const sp = addSpecies({ id, name: 'Ancient Letter in a Bottle', base: 'Ancient Letter in a Bottle', arch: 'junk', cat: CATS.junk, loc: -1, rarity: 4, kg: 0.5, depth: 0, vf: 0, fixedValue: 5000, art });
+    const sp = addSpecies({ id, name: 'Ancient Letter in a Bottle', base: 'Ancient Letter in a Bottle', arch: 'junk', cat: CATS.junk, loc: -1, rarity: 4, kg: 0.5, depth: 0, vf: 0, fixedValue: 5000, letter: true, art });
     GLOBAL.special.push(sp);
     return sp;
   })();
   const LETTER_CHANCE = 0.05; // of every message in a bottle you fish up
+
+  // Sunken treasures with a fixed price, anywhere in the world. They never snap your line.
+  function treasure(key, name, arch, rarity, kg, value, blurb, look) {
+    const id = 'global:' + key;
+    const art = makeArt(name, arch, look || null, mulberry32(hashStr(id)), rarity);
+    art.glow = '#ffe680'; art.flair = 'glints';
+    const sp = addSpecies({ id, name, base: name, arch, cat: CATS.junk, loc: -1, rarity, kg, depth: 0, vf: 0, fixedValue: value, noSnap: true, blurb, art });
+    GLOBAL.special.push(sp);
+    return sp;
+  }
+  const SKELETON = treasure('scuba-diver-skeleton', 'Scuba Diver Skeleton', 'skeleton', 4, 70, 5000,
+    'Still wearing his flippers and goggles. A museum will pay $5,000 for this spooky find!');
+  const SUBMARINE = treasure('submarine', 'Submarine', 'submarine', 5, 120000, 500000,
+    'A whole lost submarine, periscope and all! The navy pays a $500,000 reward for finding it!');
+  const SKELETON_CHANCE = 1 / 2000, SUBMARINE_CHANCE = 1 / 40000;
   const LETTERS = [
     '"Dearest Margaret, the voyage is long and the biscuits have weevils. I shall return by spring." — Captain J. Whitlock, 1743',
     '"To whoever finds this: the treasure is buried beneath the third palm. Tell no one." — signed, a nervous pirate, 1698',
@@ -505,6 +520,10 @@
     let sp;
     if (rand() < fabledChance(rodIdx, baitIdx, locIdx)) {
       sp = pickWeighted(GLOBAL.fabled, s => s.w, rand);
+    } else if (rand() < SUBMARINE_CHANCE) {
+      sp = SUBMARINE;
+    } else if (rand() < SKELETON_CHANCE) {
+      sp = SKELETON;
     } else if (rand() < FRENZY_CHANCE) {
       sp = pickWeighted(GLOBAL.frenzy, s => s.w * Math.pow(bait.luck * lm, s.frenzy.tier), rand);
     } else if (rand() < junkChance(baitIdx)) {

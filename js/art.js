@@ -860,6 +860,90 @@
     return { hx: R * 0.5, hy: -R * 0.6, hr: R * 0.2 };
   }
 
+  function bone(ctx, x1, y1, x2, y2, w) {
+    ctx.save(); ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineWidth = w + 3; ctx.strokeStyle = OUT; ctx.stroke(); ctx.lineWidth = w; ctx.strokeStyle = '#f4efdf'; ctx.stroke();
+    for (const [x, y] of [[x1, y1], [x2, y2]]) { circ(ctx, x, y, w * 0.62); ctx.fillStyle = '#f4efdf'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = OUT; ctx.stroke(); }
+    ctx.restore();
+  }
+  function drawSkeleton(ctx, a, P, s, t) {
+    const sw = Math.sin(t * 4 * a.ms), bw = Math.max(2.5, s * 0.03), lw = ctx.lineWidth;
+    // regulator hose
+    ctx.save(); ctx.lineWidth = s * 0.018 + 2; ctx.beginPath(); ctx.moveTo(s * 0.36, s * 0.03); ctx.quadraticCurveTo(s * 0.3, s * 0.16, s * 0.12, -s * 0.12); ctx.strokeStyle = '#2a2f3d'; ctx.stroke(); ctx.restore();
+    // air tank
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-s * 0.18, -s * 0.2, s * 0.36, s * 0.11, s * 0.05) : ctx.rect(-s * 0.18, -s * 0.2, s * 0.36, s * 0.11); fs(ctx, '#ffcc2e');
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.fillRect(-s * 0.14, -s * 0.185, s * 0.26, s * 0.02);
+    ctx.beginPath(); ctx.rect(s * 0.18, -s * 0.17, s * 0.04, s * 0.05); fs(ctx, '#9aa7b4');
+    // legs + flippers
+    for (const k of [0, 1]) {
+      const kick = Math.sin(t * 5 * a.ms + k * Math.PI) * s * 0.05;
+      const hx = -s * 0.15, hy = s * 0.02 + k * s * 0.02, kx = -s * 0.3, ky = s * 0.04 + kick * 0.5 + k * s * 0.02, fx = -s * 0.44, fy = s * 0.03 + kick + k * s * 0.02;
+      bone(ctx, hx, hy, kx, ky, bw); bone(ctx, kx, ky, fx, fy, bw * 0.9);
+      ctx.save(); ctx.translate(fx, fy); ctx.rotate(kick / s * 4); ctx.beginPath(); ctx.moveTo(0, -s * 0.02); ctx.lineTo(-s * 0.14, -s * 0.05); ctx.lineTo(-s * 0.15, s * 0.04); ctx.lineTo(0, s * 0.02); ctx.closePath(); ctx.lineWidth = lw; fs(ctx, k ? '#1f6fd0' : '#2f8cf0'); ctx.restore();
+    }
+    // pelvis + spine + ribs
+    ell(ctx, -s * 0.15, s * 0.02, s * 0.04, s * 0.035); ctx.lineWidth = lw; fs(ctx, '#f4efdf');
+    bone(ctx, -s * 0.15, 0, s * 0.24, -s * 0.02, bw * 0.8);
+    ctx.save(); ctx.lineWidth = bw * 0.75 + 2.5; ctx.lineCap = 'round';
+    for (let i = 0; i < 4; i++) { const x = s * (0.04 + i * 0.045); for (const pass of [0, 1]) { ctx.beginPath(); ctx.moveTo(x, -s * 0.015); ctx.quadraticCurveTo(x - s * 0.03, s * 0.08, x + s * 0.01, s * 0.09); ctx.strokeStyle = pass ? '#f4efdf' : OUT; ctx.lineWidth = pass ? bw * 0.75 : bw * 0.75 + 2.5; ctx.stroke(); } }
+    ctx.restore();
+    // arms reaching forward
+    for (const k of [0, 1]) {
+      const wav = Math.sin(t * 3 * a.ms + k * 1.7) * s * 0.04;
+      const ex = s * 0.32, ey = s * 0.08 + k * s * 0.02 + wav * 0.4, hx = s * 0.47, hy = s * 0.1 + wav + k * s * 0.02;
+      bone(ctx, s * 0.2, s * 0.01, ex, ey, bw * 0.85); bone(ctx, ex, ey, hx, hy, bw * 0.75);
+      ctx.save(); ctx.lineWidth = 1.5; ctx.strokeStyle = OUT; for (let f = -1; f <= 1; f++) { ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(hx + s * 0.035, hy + f * s * 0.015); ctx.stroke(); } ctx.restore();
+    }
+    // skull, jaw, goggles
+    const jaw = Math.abs(Math.sin(t * 6)) * s * 0.015;
+    ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(s * 0.28, s * 0.03 + jaw, s * 0.1, s * 0.04, s * 0.015) : ctx.rect(s * 0.28, s * 0.03 + jaw, s * 0.1, s * 0.04); fs(ctx, '#f4efdf');
+    circ(ctx, s * 0.32, -s * 0.03, s * 0.085); fs(ctx, '#f4efdf');
+    ctx.fillStyle = OUT; ell(ctx, s * 0.36, s * 0.0, s * 0.012, s * 0.016); ctx.fill();
+    ctx.save(); ctx.lineWidth = 1.5; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(s * (0.3 + i * 0.022), s * 0.03); ctx.lineTo(s * (0.3 + i * 0.022), s * 0.05); ctx.stroke(); } ctx.restore();
+    ctx.save(); ctx.lineWidth = s * 0.012 + 1; ctx.strokeStyle = '#2a2f3d'; ctx.beginPath(); ctx.arc(s * 0.32, -s * 0.03, s * 0.088, Math.PI * 1.05, Math.PI * 1.75); ctx.stroke(); ctx.restore();
+    ctx.beginPath(); ctx.roundRect ? ctx.roundRect(s * 0.3, -s * 0.085, s * 0.11, s * 0.06, s * 0.025) : ctx.rect(s * 0.3, -s * 0.085, s * 0.11, s * 0.06); ctx.fillStyle = 'rgba(140,220,255,0.55)'; ctx.fill(); ctx.stroke();
+    ctx.fillStyle = OUT; circ(ctx, s * 0.33, -s * 0.055, s * 0.016); ctx.fill(); circ(ctx, s * 0.375, -s * 0.055, s * 0.016); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)'; ell(ctx, s * 0.32, -s * 0.072, s * 0.015, s * 0.006, -0.3); ctx.fill();
+    return { hx: s * 0.32, hy: -s * 0.12, hr: s * 0.05 };
+  }
+  function drawSubmarine(ctx, a, P, s, t) {
+    const L = s, H = s * 0.3, bob = Math.sin(t * 1.2) * H * 0.04;
+    ctx.save(); ctx.translate(0, bob);
+    // propeller
+    ctx.save(); ctx.translate(-L * 0.5, 0);
+    ctx.beginPath(); ctx.rect(-L * 0.03, -H * 0.05, L * 0.04, H * 0.1); fs(ctx, '#7a8494');
+    for (let i = 0; i < 3; i++) { const an = t * 12 + i * 2.094, sy = Math.cos(an); ell(ctx, -L * 0.03, Math.sin(an) * H * 0.18, L * 0.012 + Math.abs(sy) * L * 0.02, H * 0.13, 0); fs(ctx, '#c9a227'); }
+    ctx.restore();
+    // tail fins
+    ctx.beginPath(); ctx.moveTo(-L * 0.36, 0); ctx.lineTo(-L * 0.48, -H * 0.55); ctx.lineTo(-L * 0.42, -H * 0.05); ctx.closePath(); fs(ctx, '#e0a81f');
+    ctx.beginPath(); ctx.moveTo(-L * 0.36, 0); ctx.lineTo(-L * 0.48, H * 0.55); ctx.lineTo(-L * 0.42, H * 0.05); ctx.closePath(); fs(ctx, '#e0a81f');
+    // tower + periscope
+    ctx.beginPath(); ctx.moveTo(-L * 0.08, -H * 0.42); ctx.lineTo(-L * 0.05, -H * 0.95); ctx.lineTo(L * 0.14, -H * 0.95); ctx.lineTo(L * 0.18, -H * 0.42); ctx.closePath(); fs(ctx, '#ffcc2e');
+    ctx.save(); ctx.lineCap = 'butt'; for (const pass of [0, 1]) { ctx.beginPath(); ctx.moveTo(L * 0.06, -H * 0.95); ctx.lineTo(L * 0.06, -H * 1.45); ctx.lineTo(L * 0.14, -H * 1.45); ctx.lineWidth = pass ? L * 0.02 : L * 0.02 + 3; ctx.strokeStyle = pass ? '#9aa7b4' : OUT; ctx.stroke(); } ctx.restore();
+    ctx.beginPath(); ctx.rect(L * 0.13, -H * 1.52, L * 0.03, H * 0.14); fs(ctx, '#4a5568');
+    // hull
+    const bp = new Path2D(); bp.ellipse(0, 0, L * 0.47, H * 0.5, 0, 0, TAU);
+    const g = ctx.createLinearGradient(0, -H * 0.5, 0, H * 0.5); g.addColorStop(0, '#ffe066'); g.addColorStop(0.55, '#ffcc2e'); g.addColorStop(1, '#e0a81f');
+    ctx.fillStyle = g; ctx.fill(bp); ctx.stroke(bp);
+    ctx.save(); ctx.clip(bp); ctx.fillStyle = 'rgba(200,60,40,0.85)'; ctx.fillRect(-L, H * 0.18, L * 2, H * 0.1); ctx.restore();
+    ctx.fillStyle = 'rgba(29,34,53,0.5)'; for (let i = 0; i < 14; i++) { circ(ctx, -L * 0.36 + i * L * 0.055, -H * 0.3 + Math.abs(i - 6.5) * H * 0.012, 1.4); ctx.fill(); }
+    // portholes
+    for (let i = 0; i < 3; i++) {
+      const x = L * (0.05 + i * 0.13), r = H * 0.16;
+      circ(ctx, x, -H * 0.02, r); fs(ctx, '#9aa7b4');
+      const gl = 0.55 + 0.45 * Math.sin(t * 3 + i);
+      const rg = ctx.createRadialGradient(x - r * 0.3, -H * 0.06, 1, x, -H * 0.02, r * 0.75); rg.addColorStop(0, 'rgba(255,250,200,' + gl + ')'); rg.addColorStop(1, '#3a8fd8');
+      circ(ctx, x, -H * 0.02, r * 0.72); ctx.fillStyle = rg; ctx.fill(); ctx.stroke();
+    }
+    ctx.fillStyle = '#1d2235'; ctx.font = 'bold ' + Math.round(H * 0.17) + 'px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('SS-1', -L * 0.2, H * 0.08);
+    // bubbles from the prop
+    ctx.strokeStyle = 'rgba(230,250,255,0.85)'; ctx.lineWidth = 1.5;
+    for (let i = 0; i < 6; i++) { const q = (t * 0.8 + i / 6) % 1; circ(ctx, -L * 0.56 - q * L * 0.25, Math.sin(i * 2 + t) * H * 0.2 - q * H * 0.3, 2 + q * 4); ctx.stroke(); }
+    ctx.restore();
+    return { hx: L * 0.05, hy: -H * 1.0, hr: 0 };
+  }
+
   // ---------------- effects ----------------
   function flairShape(ctx, kind, x, y, r, t, i) {
     switch (kind) {
@@ -910,7 +994,7 @@
     urchin: drawUrchin, sealion: drawSealion, seaspider: drawSeaspider, plankton: drawPlankton, coral: drawCoral,
     manatee: drawManatee, barnacle: drawBarnacle, eel: drawEel, serpent: drawEel, junk: drawJunk,
     mermaid: (c, a, P, s, t) => drawMermaid(c, a, P, s * 1.45, t), poseidon: drawPoseidon, bubblebuddy: drawBubbleBuddy, plesiosaur: drawPlesiosaur, mosasaur: drawMosasaur,
-    santa: drawSanta, ufo: drawUFO, alien: drawAlien, aquaman: (c, a, P, s, t) => drawAquaman(c, a, P, s * 1.55, t), trilobite: drawTrilobite
+    santa: drawSanta, ufo: drawUFO, skeleton: drawSkeleton, submarine: drawSubmarine, alien: drawAlien, aquaman: (c, a, P, s, t) => drawAquaman(c, a, P, s * 1.55, t), trilobite: drawTrilobite
   };
   function prep(a) {
     if (a._prepped) return;

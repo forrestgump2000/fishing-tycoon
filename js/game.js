@@ -342,13 +342,13 @@
 
   function hookIt() {
     const { sp, kg } = P.catch, rod = RODS[S.rod];
-    if (sp.rarity !== FABLED && kg > rod.cap * 1.6) {
+    if (sp.rarity !== FABLED && !sp.noSnap && kg > rod.cap * 1.6) {
       S.stats.snaps++; Snd.snap();
       phase = 'retrieve'; if (P.biter) P.biter.flee = true;
       toast('💥 SNAP! A ' + kgs(kg) + ' monster was too heavy for your rod (holds ' + kgs(rod.cap) + ').', 'bad');
       return;
     }
-    const heavy = sp.rarity !== FABLED && kg > rod.cap;
+    const heavy = sp.rarity !== FABLED && !sp.noSnap && kg > rod.cap;
     const r = sp.rarity;
     const diff = Math.min(1, 0.18 + Math.min(r, 5) * 0.1 + (r === FABLED ? 0.45 : 0) + (heavy ? 0.22 : 0));
     phase = 'reel';
@@ -963,7 +963,7 @@
     const rr = $('#cardRarity'); rr.textContent = sp.rarity === FABLED ? '✨ FABLED ✨' : R.name; rr.style.background = sp.rarity === FABLED ? 'linear-gradient(90deg,#ff4d5e,#ffd23f,#3fbf4f,#2f8cf0,#a43be0)' : R.color;
     const nm = $('#cardName'); nm.textContent = sp.name; nm.className = sp.rarity === FABLED ? 'rainbowtext' : '';
     $('#cardMeta').innerHTML = '<span>⚖️ ' + kgs(item.kg) + '</span><span>💰 ' + money(item.v) + (item.fz ? ' (⚡' + item.fz + '×)' : '') + '</span><span>🏷️ ' + sp.cat + '</span>';
-    $('#cardBlurb').textContent = (sp.fixedValue ? '📜 ' + LETTERS[Math.floor(Math.random() * LETTERS.length)] + ' 💰 A collector will pay $5,000 for it!' : '') || sp.blurb || (isNew ? 'A brand-new discovery for your Fishdex!' : 'Caught ' + S.dex[sp.id].n + ' times so far.');
+    $('#cardBlurb').textContent = (sp.letter ? '📜 ' + LETTERS[Math.floor(Math.random() * LETTERS.length)] + ' 💰 A collector will pay $5,000 for it!' : '') || sp.blurb || (isNew ? 'A brand-new discovery for your Fishdex!' : 'Caught ' + S.dex[sp.id].n + ' times so far.');
     $('#cardSell').textContent = 'Sell ' + money(item.v);
     if (sp.rarity === FABLED) { Snd.fabled(); toast('🌟 FABLED CATCH! You caught ' + esc(sp.name) + '!', 'gold', 5000); }
   }
