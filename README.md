@@ -21,8 +21,9 @@ A cartoony fishing tycoon game that runs in the browser. You start at a muddy po
 - **Fabled legends** (about a 0.01% chance with starter gear): Megalodon, Mermaid, Kraken, Poseidon, Bubble Buddy, Plesiosaurus, Santa Claus, UFO, Alien, Aquaman, Loch Ness Monster, Mosasaurus, Dunkleosteus and more
 - **7 rarities**: Common, Uncommon, Rare, Epic, Legendary, Mythic and Fabled
 - **Frenzy Fish** (about 2% of bites, anywhere): catching one makes everything you catch for a short time worth more money. Lucky ×1.5 is common, then Golden ×5, Ruby ×10, Diamond ×50, Cosmic ×100, and the extremely rare Mega Frenzy Fish at ×1000. Better bait makes the big ones less rare.
+- **5 nets** ($900 to $2B) that haul up 3, 5, 10, 20 or 25 creatures in one throw, with a 45-second recharge. A Frenzy Fish caught in a net doesn't start a frenzy; it makes every creature in that haul worth 1.5×.
 - **Live bait**: put a small fish from your Bucket on the hook for extra luck and bigger bites for a few casts. Big, rare, spiky or venomous creatures can't be used as bait.
-- **Beat the game**: own every rod, bait and location to become Champion Angler, then reset and play again (you keep your 🏆 trophy count)
+- **Beat the game**: own every rod, bait, net and location to become Champion Angler, then reset and play again (you keep your 🏆 trophy count)
 - A **Fishdex** that tracks every species you've discovered
 - Progress saves automatically in your browser
 

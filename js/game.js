@@ -1,7 +1,7 @@
 /* Fishing Tycoon — game loop, fishing mechanics, UI. */
 (function () {
   'use strict';
-  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance, fishBait } = window.FT;
+  const { RARITIES, FABLED, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, rollCatch, catchValue, fabledChance, fishBait, NETS, NET_COOLDOWN } = window.FT;
   const Art = window.Art;
   const $ = (s) => document.querySelector(s);
   const cv = $('#game'), ctx = cv.getContext('2d');
@@ -22,7 +22,7 @@
 
   // ---------------- save state ----------------
   const SAVE_KEY = 'fishing-tycoon-save-v1';
-  function fresh() { return { money: 0, rod: 0, bait: 0, loc: 0, rods: [0], baits: [0], locs: [0], bucket: [], dex: {}, stats: { casts: 0, catches: 0, earned: 0, fabled: 0, snaps: 0, best: null }, sound: true, quick: true, tut: true, fishBait: null, completions: 0, completeSeen: false }; }
+  function fresh() { return { money: 0, rod: 0, bait: 0, loc: 0, rods: [0], baits: [0], locs: [0], bucket: [], dex: {}, stats: { casts: 0, catches: 0, earned: 0, fabled: 0, snaps: 0, best: null }, sound: true, quick: true, tut: true, fishBait: null, completions: 0, completeSeen: false, nets: [], net: -1, netReady: 0 }; }
   function load() {
     try { const raw = localStorage.getItem(SAVE_KEY); if (raw) { const s = Object.assign(fresh(), JSON.parse(raw)); s.bucket = s.bucket.filter((b) => BY_ID[b.id]); return s; } } catch (e) { /* no storage */ }
     return fresh();
@@ -147,7 +147,7 @@
     updateFrenzy(dt);
     const sy = surfY();
     // camera
-    if (phase === 'sink' || phase === 'wait' || phase === 'bite' || phase === 'reel' || phase === 'retrieve' || phase === 'land') {
+    if (phase === 'sink' || phase === 'wait' || phase === 'bite' || phase === 'reel' || phase === 'retrieve' || phase === 'land' || (phase === 'net' && P.stage !== 'fly')) {
       const hy = P.hookY || 0;
       cam.target = Math.max(-H * 0.47, Math.min(waterPx + 80 - H, hy - H * 0.5));
     } else cam.target = -H * 0.47;
@@ -220,8 +220,118 @@
         P.hookY = Math.max(0, P.hookY - Math.max(350, P.hookY * 2.5) * dt);
         if (P.hookY <= 0) resetPhase();
         break;
+      case 'net': netUpdate(dt); break;
     }
+    updateNetButton();
     void sy;
+  }
+
+  // ---------------- nets ----------------
+  function netCooldown() { return Math.max(0, (S.netReady - Date.now()) / 1000); }
+  let netBtnText = '';
+  function updateNetButton() {
+    const b = $('#netBtn');
+    if (S.net < 0) { if (!b.classList.contains('hidden')) b.classList.add('hidden'); return; }
+    b.classList.remove('hidden');
+    const cd = netCooldown(), txt = cd > 0 ? '⏳ ' + Math.ceil(cd) + 's' : '🕸️ Net ×' + NETS[S.net].size;
+    if (txt !== netBtnText) { netBtnText = txt; $('#netLabel').textContent = txt; }
+    b.disabled = cd > 0 || phase !== 'idle';
+  }
+  function throwNet() {
+    if (S.net < 0 || phase !== 'idle' || netCooldown() > 0) return;
+    Snd.unlock(); Snd.whoosh();
+    const fx = fisherX(), tx = fx + 90 * K + rand(0.35, 0.8) * Math.max(60, W - fx - 200 * K);
+    const depth = Math.max(0.5, maxCast() * rand(0.55, 1));
+    phase = 'net'; P = { stage: 'fly', t: 0, dur: 0.7, tx, x: tx, depth, hookY: 0, targetY: depth * ppm, haul: null };
+    S.netReady = Date.now() + NET_COOLDOWN * 1000; S.stats.nets = (S.stats.nets || 0) + 1; save();
+  }
+  function rollHaul() {
+    const n = NETS[S.net].size, out = [];
+    for (let i = 0; i < n; i++) {
+      let c;
+      for (let k = 0; k < 6; k++) { c = rollCatch(S.loc, S.rod, S.bait, P.depth * rand(0.3, 1)); if (c.sp.rarity !== FABLED || c.sp.frenzy) break; }
+      if (c.sp.rarity === FABLED && !c.sp.frenzy) c = { sp: GLOBAL.junk[0], kg: GLOBAL.junk[0].kg };
+      out.push(c);
+    }
+    return out;
+  }
+  function netUpdate(dt) {
+    if (P.stage === 'fly') { P.t += dt; if (P.t >= P.dur) { P.stage = 'sink'; splash(P.x, 0); Snd.splash(); } }
+    else if (P.stage === 'sink') {
+      P.hookY = Math.min(P.targetY, P.hookY + Math.max(180, P.targetY / 1.4) * dt);
+      if (Math.random() < dt * 10) bubble(P.x + rand(-30, 30), P.hookY);
+      if (P.hookY >= P.targetY) { P.stage = 'wait'; P.t = 0; P.haul = rollHaul(); }
+    } else if (P.stage === 'wait') { P.t += dt; if (Math.random() < dt * 20) Snd.tick(); if (P.t > 1.1) { P.stage = 'rise'; Snd.bite(); } }
+    else if (P.stage === 'rise') {
+      P.hookY = Math.max(0, P.hookY - Math.max(380, P.hookY * 1.8) * dt);
+      if (P.hookY <= 0) { splash(P.x, 0); Snd.splash(); finishHaul(); }
+    }
+  }
+  let pendingHaul = null;
+  function finishHaul() {
+    const haul = P.haul; resetPhase();
+    const frenzies = haul.filter((c) => c.sp.frenzy).length;
+    const netMult = frenzies ? 1.5 : 1, fm = frenzy ? frenzy.mult : 1;
+    let newCount = 0;
+    const items = haul.map(({ sp, kg }) => {
+      const v = catchValue(sp, kg, L.tier) * netMult * (sp.frenzy ? 1 : fm);
+      if (!S.dex[sp.id]) newCount++;
+      const d = S.dex[sp.id] || (S.dex[sp.id] = { n: 0, kg: 0 });
+      d.n++; if (kg > d.kg) d.kg = +kg.toFixed(4);
+      S.stats.catches++;
+      if (!S.stats.best || v > S.stats.best.v) S.stats.best = { id: sp.id, v, kg };
+      const it = { id: sp.id, kg: +kg.toFixed(4), v };
+      if (netMult * fm > 1) it.fz = +(netMult * (sp.frenzy ? 1 : fm)).toFixed(2);
+      return it;
+    }).sort((a, b) => b.v - a.v);
+    pendingHaul = { items, frenzies, newCount };
+    Snd.catch(Math.min(5, Math.max(...items.map((i) => BY_ID[i.id].rarity))));
+    if (items.some((i) => BY_ID[i.id].rarity >= 4)) confetti(60);
+    save();
+    modalKind = 'haul'; modalTab = null; modal.classList.remove('hidden'); renderModal();
+  }
+  function settleHaul(sell) {
+    if (!pendingHaul) return;
+    const tot = pendingHaul.items.reduce((a, b) => a + b.v, 0);
+    if (sell) { S.money += tot; S.stats.earned += tot; Snd.cash(); toast('💰 Sold the net haul for ' + money(tot), 'good'); }
+    else { S.bucket.push(...pendingHaul.items); Snd.click(); toast('🪣 ' + pendingHaul.items.length + ' creatures added to your bucket', 'good'); }
+    pendingHaul = null; save(); updateHUD();
+  }
+  function renderHaul(body) {
+    const h = pendingHaul; if (!h) return;
+    const tot = h.items.reduce((a, b) => a + b.v, 0);
+    body.appendChild(el('p', 'info', '🕸️ You hauled up <b>' + h.items.length + '</b> creatures worth <b>' + money(tot) + '</b>' + (h.newCount ? ' · ' + h.newCount + ' new for your Fishdex!' : '') +
+      (h.frenzies ? '<br>⚡ ' + (h.frenzies > 1 ? h.frenzies + ' Frenzy Fish were' : 'A Frenzy Fish was') + ' tangled in the net — every creature in this haul is worth <b>1.5×</b>!' : '')));
+    const bar = el('div', 'toolbar');
+    const s1 = el('button', 'btn green', 'Sell all ' + money(tot)); s1.onclick = () => { settleHaul(true); closeModal(); };
+    const s2 = el('button', 'btn blue', 'Keep all'); s2.onclick = () => { settleHaul(false); closeModal(); };
+    bar.appendChild(s1); bar.appendChild(s2); body.appendChild(bar);
+    const rows = el('div', 'rows'); body.appendChild(rows);
+    h.items.forEach((it) => {
+      const sp = BY_ID[it.id], r = el('div', 'row');
+      r.appendChild(iconCanvas(sp, 52, 40));
+      r.appendChild(el('div', 'nm', esc(sp.name) + ' ' + rtag(sp.rarity) + (S.dex[sp.id].n === 1 ? ' <span class="rtag" style="background:#ff4d5e">NEW</span>' : '') + '<small>' + sp.cat + ' · ' + kgs(it.kg) + (it.fz ? ' · ⚡' + it.fz + '×' : '') + '</small>'));
+      r.appendChild(el('div', 'val', money(it.v)));
+      rows.appendChild(r);
+    });
+  }
+  function drawNet(x, y, r, haul, open) {
+    ctx.save(); ctx.translate(x, y);
+    if (haul && !open) {
+      haul.slice(0, 25).forEach((c, i) => {
+        const a = i * 2.39996, d = Math.sqrt((i + 0.5) / Math.max(haul.length, 1)) * r * 0.7;
+        ctx.save(); ctx.translate(Math.cos(a) * d, r * 0.2 + Math.sin(a) * d * 0.8); ctx.rotate(Math.sin(time * 6 + i) * 0.4); ctx.scale(i % 2 ? -1 : 1, 1);
+        Art.creature(ctx, c.sp, Math.min(r * 0.95, sizeFor(c.sp) * 0.7), time + i, { noFx: true }); ctx.restore();
+      });
+    }
+    const hue = NETS[Math.max(0, S.net)].hue;
+    ctx.strokeStyle = 'hsla(' + hue + ',40%,85%,0.9)'; ctx.lineWidth = 1.6;
+    ctx.beginPath(); ctx.ellipse(0, open ? 0 : r * 0.2, r, open ? r * 0.35 : r * 0.95, 0, 0, Math.PI * 2); ctx.save(); ctx.clip();
+    for (let i = -8; i <= 8; i++) { ctx.beginPath(); ctx.moveTo(i * r * 0.2 - r, -r * 1.2); ctx.lineTo(i * r * 0.2 + r, r * 1.4); ctx.stroke(); ctx.beginPath(); ctx.moveTo(i * r * 0.2 + r, -r * 1.2); ctx.lineTo(i * r * 0.2 - r, r * 1.4); ctx.stroke(); }
+    ctx.restore();
+    ctx.lineWidth = 4 * K; ctx.strokeStyle = 'hsl(' + hue + ',45%,40%)'; ctx.beginPath(); ctx.ellipse(0, open ? 0 : -r * 0.6, r * (open ? 1 : 0.55), r * 0.14, 0, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 6; i++) { const a = i / 6 * Math.PI * 2 + time; ctx.fillStyle = '#ff8a1f'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(Math.cos(a) * r * (open ? 1 : 0.55), (open ? 0 : -r * 0.6) + Math.sin(a) * r * 0.14, 4.5 * K, 0, 6.3); ctx.fill(); ctx.stroke(); }
+    ctx.restore();
   }
 
   function fail(msg, cls) {
@@ -352,6 +462,17 @@
       const q = Math.min(1, P.t / P.dur), bx = tip.x + (P.tx - tip.x) * q, byy = tip.y + (sy - tip.y) * q - Math.sin(q * Math.PI) * 140 * K;
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.quadraticCurveTo((tip.x + bx) / 2, Math.min(tip.y, byy) - 20, bx, byy); ctx.stroke();
       Art.bobber(ctx, bx, byy, K, time, false);
+    } else if (phase === 'net') {
+      const r = 46 * K + Math.min(40, NETS[S.net].size * 1.6) * K;
+      if (P.stage === 'fly') {
+        const q = Math.min(1, P.t / P.dur), bx = tip.x + (P.tx - tip.x) * q, byy = tip.y + (sy - tip.y) * q - Math.sin(q * Math.PI) * 160 * K;
+        ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(bx, byy); ctx.stroke();
+        drawNet(bx, byy, r * (0.4 + q * 0.6), null, true);
+      } else {
+        const hy = P.hookY - cam.y;
+        ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.quadraticCurveTo((tip.x + P.x) / 2, sy - 10, P.x, sy); ctx.lineTo(P.x, hy - r * 0.6); ctx.stroke();
+        drawNet(P.x, hy, r, P.haul, P.stage === 'sink');
+      }
     } else if (phase !== 'idle' && phase !== 'charge' && phase !== 'leap') {
       const hy = P.hookY - cam.y;
       ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.quadraticCurveTo((tip.x + P.x) / 2, sy - 10, P.x, sy); ctx.stroke();
@@ -489,6 +610,7 @@
     if (phase === 'charge') releaseCast();
   }
   cv.addEventListener('pointerdown', (e) => { e.preventDefault(); down(e); });
+  $('#netBtn').addEventListener('click', throwNet);
   window.addEventListener('pointerup', up);
   window.addEventListener('pointercancel', up);
   window.addEventListener('keydown', (e) => {
@@ -556,7 +678,7 @@
     holding = false; if (phase === 'charge') resetPhase();
     modalKind = kind; modalTab = tab || null; modal.classList.remove('hidden'); Snd.click(); renderModal();
   }
-  function closeModal() { modal.classList.add('hidden'); modalKind = null; }
+  function closeModal() { if (modalKind === 'haul' && pendingHaul) settleHaul(false); modal.classList.add('hidden'); modalKind = null; }
   $('#modalClose').onclick = closeModal;
   modal.addEventListener('pointerdown', (e) => { if (e.target === modal) closeModal(); });
   document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openModal(b.dataset.open)));
@@ -568,16 +690,47 @@
   }
   function renderModal() {
     const body = $('#modalBody'); body.innerHTML = ''; body.scrollTop = 0;
-    if (modalKind === 'shop') { $('#modalTitle').textContent = 'Tackle Shop'; tabs([['rods', '🎣 Rods'], ['bait', '🪱 Bait']]); renderShop(body); }
+    if (modalKind === 'shop') { $('#modalTitle').textContent = 'Tackle Shop'; tabs([['rods', '🎣 Rods'], ['bait', '🪱 Bait'], ['nets', '🕸️ Nets']]); renderShop(body); }
     else if (modalKind === 'map') { $('#modalTitle').textContent = 'Travel'; tabs(null); renderMap(body); }
     else if (modalKind === 'bucket') { $('#modalTitle').textContent = 'Your Bucket'; tabs(null); renderBucket(body); }
     else if (modalKind === 'dex') { $('#modalTitle').textContent = 'Fishdex'; tabs(null); renderDex(body); }
+    else if (modalKind === 'haul') { $('#modalTitle').textContent = 'Net Haul!'; tabs(null); renderHaul(body); }
     else if (modalKind === 'complete') { $('#modalTitle').textContent = 'Champion Angler!'; tabs(null); renderComplete(body); }
     else if (modalKind === 'settings') { $('#modalTitle').textContent = 'Settings & Stats'; tabs(null); renderSettings(body); }
   }
   function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
 
+  function netIcon(n) {
+    const c = document.createElement('canvas'); c.width = 128; c.height = 128; const x = c.getContext('2d'); x.scale(2, 2);
+    x.strokeStyle = 'hsl(' + n.hue + ',45%,40%)'; x.lineWidth = 1.5;
+    x.save(); x.beginPath(); x.ellipse(32, 36, 22, 20, 0, 0, 6.3); x.clip();
+    for (let i = -6; i <= 6; i++) { x.beginPath(); x.moveTo(32 + i * 6 - 24, 10); x.lineTo(32 + i * 6 + 24, 60); x.stroke(); x.beginPath(); x.moveTo(32 + i * 6 + 24, 10); x.lineTo(32 + i * 6 - 24, 60); x.stroke(); }
+    x.restore();
+    x.lineWidth = 4; x.strokeStyle = '#1d2235'; x.beginPath(); x.ellipse(32, 18, 18, 5, 0, 0, 6.3); x.stroke();
+    x.fillStyle = '#ff8a1f'; for (let i = 0; i < 5; i++) { x.beginPath(); x.arc(14 + i * 9, 18 + (i % 2 ? 3 : -3), 3.5, 0, 6.3); x.fill(); x.lineWidth = 1.5; x.stroke(); }
+    x.font = "900 14px 'Lilita One', sans-serif"; x.textAlign = 'center'; x.fillStyle = '#fff'; x.lineWidth = 4; x.strokeText('×' + n.size, 32, 44); x.fillText('×' + n.size, 32, 44);
+    return c;
+  }
+  function renderNets(body) {
+    body.appendChild(el('p', 'info', 'Throw a net to haul up a whole bunch of creatures at once — no reeling! Nets need ' + NET_COOLDOWN + ' seconds to dry between throws. A Frenzy Fish caught in a net doesn\'t start a frenzy — instead it makes every creature in that haul worth 1.5×.'));
+    const grid = el('div', 'grid'); body.appendChild(grid);
+    NETS.forEach((n) => {
+      const own = S.nets.indexOf(n.id) >= 0, eq = S.net === n.id;
+      const card = el('div', 'item' + (eq ? ' equipped' : own ? ' owned' : ''));
+      card.appendChild(netIcon(n));
+      const t = el('div', 'txt', '<div class="nm">' + esc(n.name) + '</div><div class="st">Catches ' + n.size + ' creatures per throw<br>Reaches as deep as your rod</div>');
+      const b = el('button', 'btn small ' + (eq ? 'gray' : own ? 'blue' : 'green'), eq ? 'Equipped' : own ? 'Equip' : 'Buy ' + money(n.price));
+      b.disabled = eq || (!own && S.money < n.price);
+      b.onclick = () => {
+        if (!own) { if (S.money < n.price) return; S.money -= n.price; S.nets.push(n.id); Snd.cash(); toast('Bought the ' + esc(n.name) + '! Tap 🕸️ Net to throw it.', 'good', 3500); }
+        else Snd.click();
+        S.net = n.id; save(); updateHUD(); if (!checkComplete()) renderModal();
+      };
+      t.appendChild(b); card.appendChild(t); grid.appendChild(card);
+    });
+  }
   function renderShop(body) {
+    if (modalTab === 'nets') { renderNets(body); return; }
     const isRod = modalTab === 'rods';
     body.appendChild(el('p', 'info', isRod ? 'Longer rods reach deeper water (bigger, pricier creatures). Stronger rods hold heavier catches.' : 'Better bait attracts rarer creatures, bites faster and boosts your odds of a Fabled legend.'));
     const grid = el('div', 'grid'); body.appendChild(grid);
@@ -710,7 +863,7 @@
     }
   }
 
-  function isComplete() { return S.rods.length >= RODS.length && S.baits.length >= BAITS.length && S.locs.length >= LOCATIONS.length; }
+  function isComplete() { return S.rods.length >= RODS.length && S.baits.length >= BAITS.length && S.locs.length >= LOCATIONS.length && S.nets.length >= NETS.length; }
   function checkComplete() {
     if (!isComplete() || S.completeSeen) return false;
     S.completeSeen = true; save(); confetti(220); Snd.fabled();
@@ -724,7 +877,7 @@
     toast(keepTrophy ? '🏆 New game started! Trophies: ' + done : 'Fresh start! Back to the Raggity Old Stick.', 'gold', 4000);
   }
   function renderComplete(body) {
-    body.appendChild(el('div', 'info', '<div style="font-size:64px;text-align:center">🏆</div><h3 style="text-align:center;font-family:Lilita One;font-size:28px;margin:4px 0">You beat Fishing Tycoon!</h3><p style="text-align:center">You own every rod, every bait and every fishing spot in the world. You\'ve found ' + Object.keys(S.dex).length.toLocaleString() + ' of ' + SPECIES.length.toLocaleString() + ' species.</p>'));
+    body.appendChild(el('div', 'info', '<div style="font-size:64px;text-align:center">🏆</div><h3 style="text-align:center;font-family:Lilita One;font-size:28px;margin:4px 0">You beat Fishing Tycoon!</h3><p style="text-align:center">You own every rod, bait, net and fishing spot in the world. You\'ve found ' + Object.keys(S.dex).length.toLocaleString() + ' of ' + SPECIES.length.toLocaleString() + ' species.</p>'));
     const box = el('div', 'toolbar'); box.style.justifyContent = 'center';
     const r = el('button', 'btn green', '🔄 Reset & play again'); r.onclick = () => { if (confirm('Start a brand new game? You keep your 🏆 trophy, everything else resets.')) resetGame(true); };
     const k = el('button', 'btn blue', 'Keep fishing'); k.onclick = closeModal;
@@ -736,7 +889,7 @@
     const st = S.stats;
     const best = st.best && BY_ID[st.best.id];
     const s = el('div', 'stats');
-    [['Casts', st.casts.toLocaleString()], ['Catches', st.catches.toLocaleString()], ['Money earned', money(st.earned)], ['Species found', Object.keys(S.dex).length.toLocaleString()], ['Fabled caught', st.fabled], ['Lines snapped', st.snaps], ['🏆 Games completed', S.completions || 0], ['Best catch', best ? esc(best.name) + ' (' + money(st.best.v) + ')' : '—']]
+    [['Casts', st.casts.toLocaleString()], ['Catches', st.catches.toLocaleString()], ['Money earned', money(st.earned)], ['Species found', Object.keys(S.dex).length.toLocaleString()], ['Fabled caught', st.fabled], ['Lines snapped', st.snaps], ['Nets thrown', st.nets || 0], ['🏆 Games completed', S.completions || 0], ['Best catch', best ? esc(best.name) + ' (' + money(st.best.v) + ')' : '—']]
       .forEach(([k, v]) => s.appendChild(el('div', 'stat', k + '<b>' + v + '</b>')));
     body.appendChild(s);
     const box = el('div', 'settings'); box.style.marginTop = '14px'; body.appendChild(box);

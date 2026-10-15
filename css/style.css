@@ -41,8 +41,11 @@ canvas#game { position: fixed; inset: 0; display: block; }
 .frenzy .fbar div { height: 100%; background: #fff; }
 @keyframes pulse { to { transform: translateX(-50%) scale(1.06); } }
 @keyframes slide { to { background-position: 200% 0; } }
-.frenzy:not(.hidden) ~ #toasts { top: 132px; }
+/* net button */
+.netbtn { position: absolute; right: 14px; bottom: calc(max(12px, env(safe-area-inset-bottom)) + 70px); pointer-events: auto; background: #ff7a3a; font-size: 18px; }
+@media (max-width: 600px) { .netbtn { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 80px); font-size: 15px; } }
 #toasts { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; align-items: center; width: min(92vw, 460px); }
+.frenzy:not(.hidden) ~ #toasts { top: 132px; }
 .toast { background: var(--cream); border: 3px solid var(--ink); border-radius: 14px; box-shadow: 0 4px 0 var(--ink); padding: 6px 14px; font-weight: 900; font-size: 15px; animation: tin .25s ease-out; text-align: center; }
 .toast.bad { background: #ffd9dc; } .toast.good { background: #d9ffd9; } .toast.gold { background: linear-gradient(90deg, #ffe66b, #ffb3f0, #8fd6ff); }
 .toast.out { opacity: 0; transform: translateY(-8px); transition: all .3s; }

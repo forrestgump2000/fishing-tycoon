@@ -164,6 +164,16 @@
     };
   });
 
+  // Nets haul several creatures at once, with a recharge between throws.
+  const NETS = [
+    { id: 0, name: 'Tattered Net', size: 3, price: 900, hue: 30 },
+    { id: 1, name: 'Rope Net', size: 5, price: 15000, hue: 45 },
+    { id: 2, name: 'Trawler Net', size: 10, price: 450000, hue: 200 },
+    { id: 3, name: 'Golden Mesh Net', size: 20, price: 3.5e7, hue: 48 },
+    { id: 4, name: 'Mega Mesh Net', size: 25, price: 2e9, hue: 280 }
+  ];
+  const NET_COOLDOWN = 45;
+
   // ---------- variants ----------
   // [key, prefix, rarityBump, sizeMult, valueMult, look]
   const VARIANTS = [
@@ -503,7 +513,7 @@
 
   G.FT = {
     RARITIES, FABLED, CATS, LOCATIONS, RODS, BAITS, SPECIES, BY_ID, POOLS, GLOBAL, MOTIONS, FLAIRS,
-    hashStr, mulberry32, tierValue, speciesValue, fabledChance, junkChance, rarityWeights, rollCatch, catchValue, fishBait, FRENZY_CHANCE
+    hashStr, mulberry32, tierValue, speciesValue, fabledChance, junkChance, rarityWeights, rollCatch, catchValue, fishBait, FRENZY_CHANCE, NETS, NET_COOLDOWN
   };
   if (typeof module !== 'undefined') module.exports = G.FT;
 })(typeof window !== 'undefined' ? window : globalThis);
