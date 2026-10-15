@@ -8,7 +8,7 @@ A cartoony fishing tycoon game that runs in the browser. You start at a muddy po
 
 1. **Hold** anywhere (mouse, touch or Space) to charge your cast, then let go. More power means a deeper cast, up to your rod's reach.
 2. When the **!** pops up, tap fast to set the hook.
-3. **Hold to reel** and keep the green bar on the fish until the meter fills.
+3. **Tug of war!** Hold to reel and drag the green bar all the way down the line to you. When the fish starts thrashing and vibrating it yanks the line back. Let go until it calms down, or the line tension maxes out and your line snaps. Tap fast to reel in quicker.
 4. Sell your catches from the **Bucket** and spend the money in the **Shop** and on **Travel**.
 
 ## What's in it

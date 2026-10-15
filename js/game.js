@@ -352,31 +352,30 @@
     const r = sp.rarity;
     const diff = Math.min(1, 0.18 + Math.min(r, 5) * 0.1 + (r === FABLED ? 0.45 : 0) + (heavy ? 0.22 : 0));
     phase = 'reel';
-    P.mg = { zone: rod.reel * (heavy ? 0.8 : 1) + (r <= 1 ? 0.04 : 0), pos: 0.2, vel: 0, fish: 0.35, fv: 0, target: 0.5, tt: 0, prog: 0.3, diff, heavy, startY: P.hookY };
+    // tug of war: p is how far the green bar has been dragged down the line toward you (0 = at the fish, 1 = landed)
+    P.mg = { p: 0.3, pull: (0.36 + rod.reel * 0.55) * (heavy ? 0.75 : 1), base: 0.06 + diff * 0.14, surgeP: 0.3 + diff * 0.4, ten: 0, surge: 0, next: rand(0.6, 1.4), vib: 0, diff, heavy, startY: P.hookY };
     if (heavy) toast('⚠️ Heavy catch! Your line is straining...', 'bad');
   }
 
   function reelUpdate(dt) {
     const m = P.mg;
-    // player box
-    m.vel += (holding ? 2.9 : -2.4) * dt;
-    m.vel *= Math.pow(0.35, dt);
-    m.pos += m.vel * dt;
-    if (m.pos < 0) { m.pos = 0; m.vel = -m.vel * 0.35; }
-    if (m.pos > 1 - m.zone) { m.pos = 1 - m.zone; m.vel = 0; }
-    // fish
-    m.tt -= dt;
-    if (m.tt <= 0) { m.target = Math.random(); m.tt = rand(0.35, 1.3) * (1.25 - m.diff * 0.6); }
-    const spd = 0.6 + m.diff * 3.2;
-    m.fv += ((m.target - m.fish) * spd - m.fv) * Math.min(1, dt * (2 + m.diff * 5));
-    m.fish = Math.max(0.02, Math.min(0.98, m.fish + m.fv * dt + Math.sin(time * (6 + m.diff * 10)) * m.diff * 0.004));
-    const inZone = m.fish >= m.pos && m.fish <= m.pos + m.zone;
-    m.prog += (inZone ? 0.36 * (m.heavy ? 0.7 : 1) : -(0.2 + m.diff * 0.12)) * dt;
-    if (inZone && Math.random() < dt * 14) Snd.tick();
-    P.hookY = m.startY * (1 - Math.max(0, m.prog) * 0.55);
-    if (m.prog >= 1) { phase = 'land'; Snd.catch(P.catch.sp.rarity === FABLED ? 8 : P.catch.sp.rarity); }
-    else if (m.prog <= 0) fail(m.heavy ? '💥 The line snapped! Try a stronger rod.' : 'It got away! Keep the green bar on the fish.');
+    // the fish fights in surges: it thrashes (vibrates) and yanks the line back toward itself
+    if (m.surge > 0) { m.surge -= dt; if (m.surge <= 0) m.next = rand(0.7, 2.0) * (1.25 - m.diff * 0.5); }
+    else { m.next -= dt; if (m.next <= 0) { m.surge = rand(0.4, 0.8) + m.diff * 0.3; Snd.bite(); } }
+    const surging = m.surge > 0;
+    m.vib += ((surging ? 1 : 0.15 + m.diff * 0.2) - m.vib) * Math.min(1, dt * 10);
+    const w = 0.85 + 0.3 * Math.abs(Math.sin(time * 23));
+    // reeling against a thrashing fish builds line tension; let go while it fights, reel while it rests
+    if (holding) { m.p += (m.pull - (surging ? m.surgeP : m.base) * w) * dt; m.ten += (surging ? 1.5 : -0.5) * dt; }
+    else { m.p -= (surging ? m.surgeP * 0.5 : m.base) * w * dt; m.ten -= dt; }
+    m.ten = Math.max(0, m.ten);
+    if (holding && Math.random() < dt * 16) Snd.tick();
+    if (m.ten >= 1) { S.stats.snaps++; Snd.snap(); fail('💥 SNAP! Too much tension — let go of the reel while the fish thrashes!'); return; }
+    P.hookY = m.startY * (1 - Math.max(0, m.p) * 0.55);
+    if (m.p >= 1) { phase = 'land'; Snd.catch(P.catch.sp.rarity === FABLED ? 8 : P.catch.sp.rarity); }
+    else if (m.p <= 0) fail(m.heavy ? '💥 The line snapped! Try a stronger rod.' : 'It got away! It pulled the line all the way back.');
   }
+
 
   function landed() {
     const { sp, kg } = P.catch;
@@ -451,7 +450,7 @@
     if (phase === 'charge') pose = -1.05 - P.p * 0.9;
     else if (phase === 'cast') pose = -2.0 + Math.min(1, P.t / 0.18) * 1.55;
     else if (phase === 'bite') pose = -0.6 + Math.sin(time * 30) * 0.08;
-    else if (phase === 'reel') pose = -0.8 + Math.sin(time * 12) * 0.05 * (P.mg.diff + 0.3);
+    else if (phase === 'reel') pose = -0.75 + (P.mg.surge > 0 ? 0.35 + Math.sin(time * 40) * 0.08 : Math.sin(time * 12) * 0.04);
     else if (phase !== 'idle') pose = -0.55;
     const fx = fisherX();
     const tip = sy > -300 ? Art.fisher(ctx, L, fx, sy, K, time, pose, RODS[S.rod]) : { x: fx + 60 * K, y: sy - 160 * K };
@@ -560,31 +559,49 @@
   }
 
   function drawReel() {
-    const m = P.mg, bh = Math.min(H * 0.55, 380), bw = 54 * Math.max(0.85, K), x = P.x > W * 0.55 ? 60 + 40 * K : W - bw - 70 * Math.max(0.8, K), y = H * 0.5 - bh / 2 - 20;
+    const m = P.mg, surging = m.surge > 0;
+    const pw = Math.min(W - 24, 600), ph = 96, px = (W - pw) / 2, py = H - ph - (W < 600 ? 100 : 92);
+    const x0 = px + 62, x1 = px + pw - 84, ly = py + ph * 0.58;
     ctx.save(); ctx.lineWidth = 4; ctx.strokeStyle = '#1d2235';
-    ctx.fillStyle = '#b07a46'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(x - 10, y - 10, bw + 20, bh + 20, 16) : ctx.rect(x - 10, y - 10, bw + 20, bh + 20); ctx.fill(); ctx.stroke();
-    const g = ctx.createLinearGradient(0, y, 0, y + bh); g.addColorStop(0, '#5ad1ff'); g.addColorStop(1, '#0d3a66');
-    ctx.fillStyle = g; ctx.fillRect(x, y, bw, bh); ctx.strokeRect(x, y, bw, bh);
-    // zone
-    const zy = y + bh * (1 - m.pos - m.zone), zh = bh * m.zone;
-    const inZone = m.fish >= m.pos && m.fish <= m.pos + m.zone;
-    ctx.fillStyle = inZone ? 'rgba(120,255,120,0.75)' : 'rgba(120,255,120,0.45)'; ctx.fillRect(x + 3, zy, bw - 6, zh); ctx.strokeRect(x + 3, zy, bw - 6, zh);
-    // fish marker
-    const fy = y + bh * (1 - m.fish), sp = P.catch.sp, rc = sp.rarity === FABLED ? 'hsl(' + ((time * 200) % 360) + ',90%,60%)' : RARITIES[sp.rarity].color;
-    ctx.save(); ctx.translate(x + bw / 2, fy); ctx.rotate(Math.sin(time * 14) * 0.3);
-    ctx.fillStyle = rc; ctx.beginPath(); ctx.ellipse(0, 0, 17, 11, 0, 0, 6.3); ctx.fill(); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(-14, 0); ctx.lineTo(-25, -9); ctx.lineTo(-25, 9); ctx.closePath(); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(7, -3, 4, 0, 6.3); ctx.fill(); ctx.fillStyle = '#1d2235'; ctx.beginPath(); ctx.arc(8, -3, 2, 0, 6.3); ctx.fill();
+    ctx.fillStyle = 'rgba(255,248,231,0.95)'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(px, py, pw, ph, 18) : ctx.rect(px, py, pw, ph); ctx.fill(); ctx.stroke();
+    // title
+    ctx.font = "900 " + (W < 600 ? 17 : 20) + "px 'Lilita One', sans-serif"; ctx.textAlign = 'center'; ctx.lineWidth = 5; ctx.lineJoin = 'round';
+    const msg = surging ? (holding ? '⚠️ LET GO! IT\'S THRASHING!' : '🐟 IT\'S PULLING… WAIT!') : holding ? 'REELING IN!' : 'HOLD TO REEL!';
+    ctx.strokeStyle = '#1d2235'; ctx.fillStyle = surging ? '#ff4d5e' : '#fff'; ctx.strokeText(msg, W / 2, py + 22); ctx.fillText(msg, W / 2, py + 22);
+    // track: wavy line that thrashes while the fish fights
+    const fx = x1 + 40 + (Math.random() - 0.5) * 10 * m.vib, fy = ly + (Math.random() - 0.5) * 10 * m.vib;
+    ctx.lineWidth = 10; ctx.strokeStyle = '#c9b48a'; ctx.beginPath(); ctx.moveTo(x0, ly); ctx.lineTo(x1, ly); ctx.stroke();
+    const bx = x1 - Math.max(0, Math.min(1, m.p)) * (x1 - x0);
+    const g = ctx.createLinearGradient(bx, 0, x1, 0); g.addColorStop(0, '#3fbf4f'); g.addColorStop(1, 'rgba(63,191,79,0.25)');
+    ctx.strokeStyle = g; ctx.beginPath(); ctx.moveTo(bx, ly); ctx.lineTo(x1, ly); ctx.stroke();
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.beginPath();
+    for (let i = 0; i <= 40; i++) { const q = i / 40, x = x0 + (fx - 18 - x0) * q; ctx.lineTo(x, ly + Math.sin(q * 30 + time * 40) * 3.5 * m.vib * q); }
+    ctx.stroke();
+    // your end: finish flag
+    ctx.fillStyle = '#ffcf9e'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(px + 32, ly, 18, 0, 6.3); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#6b7a3a'; ctx.beginPath(); ctx.ellipse(px + 32, ly - 13, 22, 5, 0, 0, 6.3); ctx.fill(); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px + 20, ly - 14); ctx.quadraticCurveTo(px + 20, ly - 32, px + 32, ly - 32); ctx.quadraticCurveTo(px + 44, ly - 32, px + 44, ly - 14); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#1d2235'; ctx.beginPath(); ctx.arc(px + 37, ly - 2, 2.5, 0, 6.3); ctx.arc(px + 28, ly - 2, 2.5, 0, 6.3); ctx.fill();
+    ctx.setLineDash([4, 4]); ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(x0, ly - 22); ctx.lineTo(x0, ly + 22); ctx.stroke(); ctx.setLineDash([]);
+    // green bar
+    const jx = (Math.random() - 0.5) * 7 * m.vib;
+    ctx.save(); ctx.translate(bx + jx, ly);
+    ctx.shadowColor = 'rgba(63,255,90,0.8)'; ctx.shadowBlur = holding ? 16 : 6;
+    ctx.fillStyle = '#3fbf4f'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 3; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(-22, -15, 44, 30, 9) : ctx.rect(-22, -15, 44, 30); ctx.fill(); ctx.shadowBlur = 0; ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = "900 15px 'Lilita One', sans-serif"; ctx.textBaseline = 'middle'; ctx.fillText('◀◀', 0, 1);
     ctx.restore();
-    // progress
-    const px = x + bw + 16, pw = 14;
-    ctx.fillStyle = '#fff8e7'; ctx.fillRect(px, y, pw, bh); ctx.strokeRect(px, y, pw, bh);
-    const pr = Math.max(0, Math.min(1, m.prog));
-    ctx.fillStyle = pr > 0.66 ? '#3fbf4f' : pr > 0.33 ? '#ffd23f' : '#ff4d5e'; ctx.fillRect(px + 2, y + bh * (1 - pr), pw - 4, bh * pr);
-    ctx.font = "900 " + Math.round(16 * K + 4) + "px 'Lilita One', sans-serif"; ctx.textAlign = 'center'; ctx.fillStyle = '#fff'; ctx.lineWidth = 5;
-    const t1 = holding ? 'REEL!' : 'HOLD TO REEL';
-    ctx.strokeText(t1, x + bw / 2 + 10, y - 22); ctx.fillText(t1, x + bw / 2 + 10, y - 22);
-    if (m.heavy) { ctx.fillStyle = '#ffd23f'; ctx.strokeText('HEAVY!', x + bw / 2 + 10, y + bh + 40); ctx.fillText('HEAVY!', x + bw / 2 + 10, y + bh + 40); }
+    // the fish, vibrating and pulling
+    const sp = P.catch.sp;
+    ctx.save(); ctx.translate(fx, fy); ctx.rotate((Math.random() - 0.5) * 0.5 * m.vib); ctx.scale(-1, 1);
+    if (surging) { ctx.fillStyle = 'rgba(255,77,94,0.35)'; ctx.beginPath(); ctx.arc(0, 0, 32, 0, 6.3); ctx.fill(); }
+    Art.creature(ctx, sp, 56, time * (1 + m.vib * 3), { noFx: true });
+    ctx.restore();
+    // line tension meter
+    const tw = Math.min(160, pw * 0.3), tx = px + pw - tw - 14, ty = py + ph - 16;
+    ctx.fillStyle = '#1d2235'; ctx.font = "900 11px Nunito, sans-serif"; ctx.textAlign = 'right'; ctx.fillText('LINE TENSION', tx - 6, ty + 5);
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1d2235'; ctx.lineWidth = 2; ctx.fillRect(tx, ty - 3, tw, 10); ctx.strokeRect(tx, ty - 3, tw, 10);
+    ctx.fillStyle = m.ten > 0.66 ? '#ff4d5e' : m.ten > 0.33 ? '#ffb534' : '#3fbf4f'; ctx.fillRect(tx + 1, ty - 2, (tw - 2) * Math.min(1, m.ten), 8);
+    if (m.heavy) { ctx.font = "900 13px 'Lilita One', sans-serif"; ctx.fillStyle = '#ff4d5e'; ctx.textAlign = 'right'; ctx.fillText('HEAVY!', px + pw - 12, py + 20); }
     ctx.restore();
   }
 
@@ -604,6 +621,7 @@
     holding = true;
     if (phase === 'idle') startCharge();
     else if (phase === 'bite') hookIt();
+    else if (phase === 'reel') { if (P.mg.surge > 0) P.mg.ten += 0.08; else P.mg.p += 0.025; }
   }
   function up() {
     holding = false;
